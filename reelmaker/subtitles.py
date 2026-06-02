@@ -162,6 +162,66 @@ def chunk_transcript(
     return chunks
 
 
+def _duration(cue: SubtitleCue) -> float:
+    return max(0.0, cue.end - cue.start)
+
+
+def _overlap(a: SubtitleCue, b: SubtitleCue) -> float:
+    return max(0.0, min(a.end, b.end) - max(a.start, b.start))
+
+
+def normalize_segment_cues(cues: list[SubtitleCue], *, segment_duration: float) -> list[SubtitleCue]:
+    """Clean YouTube subtitle artefacts for burned captions.
+
+    YouTube auto captions can sometimes produce long overlapping cues plus
+    normal short cues. If burned as-is, FFmpeg/libass displays two subtitle
+    layers at the same time, including one that remains on screen for the
+    whole reel. This function keeps the short timeline and removes obvious
+    overlay artefacts.
+    """
+    if not cues:
+        return []
+
+    sorted_cues = sorted(cues, key=lambda c: (c.start, c.end))
+
+    # Drop very long overlay cues when shorter cues cover the same period.
+    filtered: list[SubtitleCue] = []
+    for cue in sorted_cues:
+        cue_duration = _duration(cue)
+        overlaps_shorter = [
+            other
+            for other in sorted_cues
+            if other is not cue and _duration(other) < cue_duration * 0.75 and _overlap(cue, other) > 0.3
+        ]
+        if cue_duration > max(8.0, segment_duration * 0.45) and len(overlaps_shorter) >= 2:
+            continue
+        filtered.append(cue)
+
+    # Merge consecutive duplicate captions.
+    merged: list[SubtitleCue] = []
+    for cue in filtered:
+        if merged and cue.text == merged[-1].text and cue.start - merged[-1].end <= 0.4:
+            previous = merged[-1]
+            merged[-1] = SubtitleCue(previous.index, previous.start, max(previous.end, cue.end), previous.text)
+        else:
+            merged.append(cue)
+
+    # Resolve remaining overlaps so libass displays only one changing caption.
+    resolved: list[SubtitleCue] = []
+    for cue in merged:
+        if resolved and resolved[-1].end > cue.start:
+            previous = resolved[-1]
+            new_end = max(previous.start + 0.25, cue.start - 0.05)
+            if new_end > previous.start:
+                resolved[-1] = SubtitleCue(previous.index, previous.start, new_end, previous.text)
+            else:
+                resolved.pop()
+        if cue.end - cue.start >= 0.25:
+            resolved.append(cue)
+
+    return [SubtitleCue(index=i, start=c.start, end=c.end, text=c.text) for i, c in enumerate(resolved, start=1)]
+
+
 def cues_for_segment(cues: list[SubtitleCue], start: float, end: float) -> list[SubtitleCue]:
     selected: list[SubtitleCue] = []
     for cue in cues:
@@ -171,4 +231,4 @@ def cues_for_segment(cues: list[SubtitleCue], start: float, end: float) -> list[
         local_end = min(end - start, cue.end - start)
         if local_end > local_start:
             selected.append(SubtitleCue(index=len(selected) + 1, start=local_start, end=local_end, text=cue.text))
-    return selected
+    return normalize_segment_cues(selected, segment_duration=max(0.0, end - start))

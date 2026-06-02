@@ -8,11 +8,15 @@ OUTPUT_DIR="output/my-video"
 OLLAMA_URL="http://localhost:11434"
 MODEL="qwen3:4b"
 SUBTITLE_LANGS="fr.*,fr"
+EPISODE_TITLE="Titre de l'episode YouTube"
 
 # Git Bash compatible venv activation.
 if [ -d ".venv" ]; then
   source .venv/Scripts/activate 2>/dev/null || source .venv/bin/activate
 fi
+
+# If accents are mojibaked in Git Bash, keep this disabled.
+# export REELMAKER_UNICODE_CONSOLE=1
 
 python -m reelmaker all \
   --youtube-url "$YOUTUBE_URL" \
@@ -27,6 +31,12 @@ python -m reelmaker all \
   --ranking-mode local \
   --ollama-timeout 600 \
   --ollama-num-predict 1024 \
-  --min-duration 15 \
-  --max-duration 75 \
+  --min-duration 18 \
+  --target-duration 22 \
+  --max-duration 60 \
+  --subtitle-font-size 64 \
+  --subtitle-margin-v 220 \
+  --crop-mode center \
+  --end-card-seconds 2.0 \
+  --episode-title "$EPISODE_TITLE" \
   --output-dir "$OUTPUT_DIR"

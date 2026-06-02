@@ -44,3 +44,23 @@ def test_local_rank_penalizes_warnings():
     ranked = local_rank_candidates([warned, good], shortlist_count=2)
 
     assert ranked[0] == good
+
+from reelmaker.analyzer import refine_candidate_boundaries
+from reelmaker.models import SubtitleCue
+
+
+def test_refine_candidate_boundaries_expands_short_candidate():
+    candidate = ReelCandidate("C001", 10, 14, "A", "hook", "reason", 8.0, "txt", warnings=["too_short"])
+    cues = [
+        SubtitleCue(1, 10, 14, "La maman couve."),
+        SubtitleCue(2, 14.2, 18, "Pendant trente jours."),
+        SubtitleCue(3, 18.2, 23, "Les petits restent dans le nichoir."),
+        SubtitleCue(4, 23.2, 28, "Ensuite ils apprennent a voler."),
+    ]
+
+    refined = refine_candidate_boundaries([candidate], cues, min_duration=18, target_duration=22, max_duration=60)
+
+    assert len(refined) == 1
+    assert refined[0].duration >= 18
+    assert "too_short" not in refined[0].warnings
+    assert "boundary_refined" in refined[0].warnings

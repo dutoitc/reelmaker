@@ -5,20 +5,22 @@ Generate vertical reels from a long video using:
 - a **YouTube URL** for high-quality subtitles/transcript;
 - a **local video file** for clean rendering;
 - **Ollama** for local AI candidate selection;
-- **FFmpeg** for vertical cuts and burned subtitles.
+- **FFmpeg** for vertical cuts, ASS burned subtitles, and optional YouTube end cards.
 
-The default model is now `qwen3:4b` to keep the MVP usable on a local PC. For better quality, use `qwen3:8b` on selected videos.
+Version **0.2.0** focuses on making the MVP usable in real runs: safer resume/cache, longer reel boundaries, bottom captions, Windows/Git Bash console safety, and optional basic face-centered crop.
 
-## Current MVP workflow
+## Current workflow
 
 ```text
 YouTube URL + local video
 → extract/cached YouTube subtitles with yt-dlp
 → split transcript into chunks
 → Ollama proposes reel candidates per chunk
+→ local boundary refinement expands short cuts to phrase/subtitle boundaries
 → local ranking creates a shortlist
-→ human validates 10 reels
-→ FFmpeg renders 9:16 MP4 reels with subtitles
+→ human validates reels, unless shortlist <= target count
+→ FFmpeg renders 9:16 MP4 reels with bottom subtitles
+→ optional final YouTube call-to-action card
 ```
 
 ## Requirements
@@ -31,23 +33,19 @@ Install these tools and make sure they are available in `PATH`:
 - Git Bash on Windows
 - yt-dlp dependency installed by the Python package
 
-Recommended for current YouTube extraction reliability:
-
-- install/update `deno`, because recent yt-dlp YouTube extraction increasingly expects a JavaScript runtime;
-- keep `yt-dlp` updated;
-- start with French subtitles only: `--subtitle-langs "fr.*,fr"`.
-
-Install the fast default Ollama model:
+Recommended:
 
 ```bash
 ollama pull qwen3:4b
 ```
 
-Optional higher-quality model:
+Optional, only if you want `--crop-mode face`:
 
 ```bash
-ollama pull qwen3:8b
+pip install opencv-python
 ```
+
+OpenCV face mode is deliberately basic: it detects **frontal faces**, not full people, and computes one static horizontal crop for the whole reel. If it fails, Reelmaker falls back to centered crop.
 
 ## Install
 
@@ -83,20 +81,32 @@ python -m reelmaker all \
   --chunk-seconds 300 \
   --ranking-mode local \
   --ollama-num-predict 1024 \
+  --min-duration 18 \
+  --target-duration 22 \
+  --max-duration 60 \
+  --subtitle-font-size 64 \
+  --subtitle-margin-v 220 \
+  --end-card-seconds 2.0 \
+  --episode-title "Titre de l'episode YouTube" \
   --output-dir "output/my-video"
 ```
 
-The program displays the shortlist. Choose 10 by typing numbers, for example:
+## What changed in 0.2.0
 
-```text
-1,2,4,7,8,9,11,12,15,18
-```
-
-Press `Enter` to accept the top 10.
+| Area | Change |
+|---|---|
+| Selection | If the shortlist has 10 candidates and target is 10, Reelmaker selects them automatically. No more “choose 10 among 10”. |
+| Encoding | Candidate display is ASCII-safe by default on Windows to avoid mojibake in Git Bash. JSON files remain UTF-8. Set `REELMAKER_UNICODE_CONSOLE=1` to display accents. |
+| Duration | Default minimum reel duration is now 18s, target duration 22s. Short LLM candidates are expanded to nearby subtitle boundaries. |
+| Audio cuts | End times are extended with post-padding and following cues to reduce cut-off phrases. |
+| Subtitles | Burned subtitles now use ASS, bottom-aligned, larger, with outline. Default margin: `--subtitle-margin-v 220`. |
+| Subtitle artefacts | Long overlapping YouTube subtitle cues are filtered to avoid one caption staying on screen while another changes. |
+| End card | Optional final card: `--end-card-seconds 2.0 --episode-title "..."`. |
+| Vertical crop | Default remains centered. Optional basic face crop: `--crop-mode face` with `opencv-python`. |
 
 ## Resume / cache
 
-Reelmaker now resumes previous runs by default.
+Reelmaker resumes previous runs by default.
 
 It reuses:
 
@@ -115,19 +125,6 @@ To disable resume/cache:
 
 ```bash
 --no-resume
-```
-
-## Run without local video
-
-This is more flexible but slower and usually lower quality than your local master:
-
-```bash
-python -m reelmaker all \
-  --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
-  --download-video \
-  --ollama-url "http://localhost:11434" \
-  --model "qwen3:4b" \
-  --output-dir "output/my-video"
 ```
 
 ## Commands
@@ -158,6 +155,8 @@ python -m reelmaker render \
   --source-video "/c/Users/cedric/Videos/source.mp4" \
   --subtitle-file "output/my-video/subtitles/VIDEO_ID.fr.srt" \
   --selected-reels "output/my-video/selected_reels.json" \
+  --end-card-seconds 2.0 \
+  --episode-title "Titre de l'episode YouTube" \
   --output-dir "output/my-video"
 ```
 
@@ -178,7 +177,10 @@ output/my-video/
   reels/
     R01/
       R01.mp4
+      R01_content.mp4      # when end card is enabled
+      R01_end_card.mp4     # when end card is enabled
       subtitles.srt
+      subtitles.ass
       metadata.json
       caption.txt
     R02/
@@ -195,16 +197,17 @@ output/my-video/
 | `--chunk-seconds` | 300 | transcript block size |
 | `--candidates-per-chunk` | 3 | max proposals per block |
 | `--ranking-mode` | `local` | avoids a slow extra LLM call |
-| `--min-duration` | 15 | shortest reel |
-| `--max-duration` | 75 | longest reel |
-| `--temperature` | 0.2 | lower = more stable |
-| `--num-ctx` | 16384 | Ollama context size |
-| `--ollama-num-predict` | 1024 | maximum generated tokens per request |
+| `--min-duration` | 18 | shortest reel after refinement |
+| `--target-duration` | 22 | preferred short reel duration |
+| `--max-duration` | 60 | longest reel |
+| `--post-padding` | 1.2 | seconds kept after last subtitle cue |
+| `--subtitle-font-size` | 64 | burned caption size |
+| `--subtitle-margin-v` | 220 | bottom caption margin; larger = higher |
+| `--crop-mode` | `center` | use `face` for optional OpenCV face crop |
+| `--end-card-seconds` | 0 | 0 disables final YouTube card |
 | `--crf` | 20 | lower = better/larger MP4 |
 
 ## YouTube subtitle robustness
-
-If YouTube returns `HTTP Error 429` while downloading one of several subtitle variants, Reelmaker keeps a usable subtitle file already downloaded instead of aborting.
 
 The safest default is:
 
@@ -218,5 +221,4 @@ Avoid adding `en.*` unless you need English fallback, because each extra languag
 
 - Local source video is preferred: better quality, less download time, no YouTube recompression.
 - YouTube subtitles are used only as transcript and timing source.
-- If subtitle burning fails, rendering retries without burned subtitles and keeps the `.srt` file.
-- The JSON files are meant to be editable manually before rendering.
+- Shorts/Reels/TikTok should usually be 15–30s. This tool defaults around 18–22s for MVP testing.

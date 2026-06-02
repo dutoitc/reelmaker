@@ -21,3 +21,19 @@ Le pont commence ici.
     assert len(cues) == 2
     assert cues[0].text == "Bonjour Orbe"
     assert cues[1].start == 4.0
+
+from reelmaker.models import SubtitleCue
+from reelmaker.subtitles import cues_for_segment
+
+
+def test_cues_for_segment_drops_long_overlapping_caption():
+    cues = [
+        SubtitleCue(1, 0, 20, "Long caption staying forever"),
+        SubtitleCue(2, 1, 3, "Short one"),
+        SubtitleCue(3, 4, 6, "Short two"),
+        SubtitleCue(4, 7, 9, "Short three"),
+    ]
+
+    local = cues_for_segment(cues, 0, 20)
+
+    assert [c.text for c in local] == ["Short one", "Short two", "Short three"]

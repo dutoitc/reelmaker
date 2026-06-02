@@ -17,8 +17,9 @@ Input:
 
 Output:
 
-- 10 vertical MP4 reels, 1080x1920.
-- Burned subtitles when FFmpeg supports the subtitles filter.
+- Around 10 vertical MP4 reels, 1080x1920.
+- Burned ASS subtitles near the bottom of the frame.
+- Optional final YouTube call-to-action card.
 - One metadata JSON and one caption text file per reel.
 - Intermediate JSON files for transcript, candidates, shortlist, and final selections.
 
@@ -40,8 +41,9 @@ Dependencies:
 - yt-dlp Python package
 - FFmpeg installed externally
 - Ollama installed externally
+- Optional: `opencv-python` only for `--crop-mode face`
 
-No heavy framework is used. The MVP intentionally avoids Typer, Pydantic, MoviePy, Whisper, or UI dependencies.
+No heavy framework is used. The MVP intentionally avoids Typer, Pydantic, MoviePy, Whisper, or UI dependencies. OpenCV is optional and not required for the default workflow.
 
 ## Recommended Ollama model
 
@@ -71,9 +73,11 @@ Current pipeline:
 4. Save each chunk response and parsed candidates immediately.
 5. Merge all candidates.
 6. Rank locally by score and warning penalties by default.
-7. Show the shortlist to the human user.
-8. User validates 10 by typing candidate numbers.
-9. Render the selected reels.
+7. Expand candidate boundaries to nearby subtitle cues to avoid 4-12s clips and mid-sentence audio cuts.
+8. Show the shortlist to the human user.
+9. If shortlist size is <= target count, select all automatically.
+10. Otherwise, user validates the final reels by typing candidate numbers.
+11. Render the selected reels.
 
 This strategy reduces context drift and keeps the local model focused. It also avoids a slow and fragile second LLM ranking pass.
 
@@ -133,8 +137,14 @@ Rendering is done by FFmpeg:
 
 - 9:16 vertical crop/scale.
 - MP4 H.264 output.
-- Burned subtitles if supported.
-- SRT retained for each reel.
+- Burned ASS subtitles if supported.
+- SRT and ASS subtitles retained for each reel.
+- Optional end card rendered as a short black 1080x1920 segment with CTA text.
+
+Vertical crop:
+
+- Default: centered crop.
+- Optional: `--crop-mode face`, using OpenCV Haar frontal-face detection to compute one static horizontal crop per reel. This is a pragmatic helper, not full person tracking.
 
 ## Current CLI commands
 
@@ -158,9 +168,9 @@ Other commands:
 
 ## Known limitations
 
-- No automatic face/object tracking for vertical crop yet. Current crop is centered.
-- Subtitle styling is basic.
-- Hooks are text suggestions; no separate visual title card yet.
+- `--crop-mode face` only detects frontal faces and computes a static crop; it is not full person tracking.
+- Subtitle styling is practical but not a branded motion-graphics system.
+- Hooks are text suggestions; no separate animated title card yet.
 - The local LLM can still produce imperfect JSON; parsing includes a loose extractor but failures are logged.
 - FFmpeg subtitle burning may fail on some builds; the renderer retries without burned subtitles.
 - YouTube subtitle extraction may require the video to have subtitles available and accessible.
@@ -169,13 +179,14 @@ Other commands:
 
 ## Next logical improvements
 
-1. Add smart crop zones: center, left, right, or manual crop per reel.
-2. Add title overlay / first-frame hook text.
-3. Add optional YouTube Shorts metadata export.
-4. Add `reels_plan.json` import/export for DaVinci timelines later.
-5. Add basic GUI or local web UI for validating the shortlist.
-6. Add a mode that uses YouTube Analytics retention data if available.
-7. Add binary packaging with PyInstaller or Nuitka.
+1. Add manual crop zones per reel: center, left, right, custom x.
+2. Add better person tracking via a modern detector if dependency size is acceptable.
+3. Add title overlay / first-frame hook text.
+4. Add optional YouTube Shorts metadata export.
+5. Add `reels_plan.json` import/export for DaVinci timelines later.
+6. Add basic GUI or local web UI for validating the shortlist.
+7. Add a mode that uses YouTube Analytics retention data if available.
+8. Add binary packaging with PyInstaller or Nuitka.
 
 ## Project style
 
@@ -187,6 +198,18 @@ Prefer:
 - Manual override at every important step.
 - Conservative AI prompts.
 - Practical output over complex architecture.
+
+## Notes version 0.2.0
+
+- Kept `qwen3:4b` as default model and local ranking as default.
+- Added candidate boundary refinement using subtitle cues.
+- Changed defaults to `--min-duration 18`, `--target-duration 22`, `--max-duration 60`.
+- If shortlist size is <= target count, the tool selects all candidates automatically.
+- Console shortlist display is ASCII-safe on Windows by default; JSON remains UTF-8.
+- Added ASS subtitles with bottom alignment, larger font, outline and margin controls.
+- Added cleanup of overlapping long YouTube subtitle cues for reel segments.
+- Added optional end card: `--end-card-seconds`, `--episode-title`, `--youtube-cta`.
+- Added optional basic face crop mode with OpenCV: `--crop-mode face`.
 
 ## Notes version 0.1.3
 
