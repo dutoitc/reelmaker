@@ -24,6 +24,7 @@ def refine_candidate_boundaries(
     min_duration: int = 18,
     target_duration: int = 22,
     max_duration: int = 60,
+    max_end_extension: float = 2.0,
     pre_padding: float = 0.25,
     post_padding: float = 1.2,
 ) -> list[ReelCandidate]:
@@ -52,6 +53,7 @@ def refine_candidate_boundaries(
                     min_duration=min_duration,
                     target_duration=target_duration,
                     max_duration=max_duration,
+                    max_end_extension=max_end_extension,
                     pre_padding=pre_padding,
                     post_padding=post_padding,
                 )
@@ -83,6 +85,7 @@ def refine_candidate_boundaries(
                 min_duration=per_segment_min,
                 target_duration=per_segment_target,
                 max_duration=per_segment_max,
+                max_end_extension=max_end_extension,
                 pre_padding=pre_padding,
                 post_padding=post_padding,
             )[0]
@@ -117,6 +120,7 @@ def _refine_single_candidates(
     min_duration: int,
     target_duration: int,
     max_duration: int,
+    max_end_extension: float,
     pre_padding: float,
     post_padding: float,
 ) -> list[ReelCandidate]:
@@ -128,6 +132,7 @@ def _refine_single_candidates(
             min_duration=min_duration,
             target_duration=target_duration,
             max_duration=max_duration,
+            max_end_extension=max_end_extension,
             pre_padding=pre_padding,
             post_padding=post_padding,
         )
@@ -137,6 +142,7 @@ def _refine_single_candidates(
         min_duration=min_duration,
         target_duration=target_duration,
         max_duration=max_duration,
+        max_end_extension=max_end_extension,
         pre_padding=pre_padding,
         post_padding=post_padding,
     )
@@ -157,6 +163,7 @@ def _refine_with_words(
     min_duration: int,
     target_duration: int,
     max_duration: int,
+    max_end_extension: float,
     pre_padding: float,
     post_padding: float,
 ) -> list[ReelCandidate]:
@@ -178,6 +185,7 @@ def _refine_with_words(
                     min_duration=min_duration,
                     target_duration=target_duration,
                     max_duration=max_duration,
+                    max_end_extension=max_end_extension,
                     pre_padding=pre_padding,
                     post_padding=post_padding,
                 )
@@ -199,6 +207,7 @@ def _refine_with_words(
             preferred_end=preferred_end,
             min_duration=min_duration,
             max_duration=max_duration,
+            max_end_extension=max_end_extension,
         )
         if end_point is None:
             refined.extend(
@@ -208,6 +217,7 @@ def _refine_with_words(
                     min_duration=min_duration,
                     target_duration=target_duration,
                     max_duration=max_duration,
+                    max_end_extension=max_end_extension,
                     pre_padding=pre_padding,
                     post_padding=post_padding,
                 )
@@ -215,8 +225,9 @@ def _refine_with_words(
             continue
 
         new_end = min(video_end, end_point.time + min(post_padding, end_point.available_silence))
-        if new_end - new_start > max_duration:
-            new_end = new_start + max_duration
+        hard_max_duration = max_duration + max(0.0, max_end_extension)
+        if new_end - new_start > hard_max_duration:
+            new_end = new_start + hard_max_duration
 
         candidate.start = round(new_start, 3)
         candidate.end = round(new_end, 3)
@@ -226,7 +237,7 @@ def _refine_with_words(
             *(f"start:{reason}" for reason in start_point.reasons),
             *(f"end:{reason}" for reason in end_point.reasons),
         ]
-        _mark_boundary_result(candidate, original_start, original_end, min_duration, max_duration)
+        _mark_boundary_result(candidate, original_start, original_end, min_duration, max_duration, max_end_extension)
         refined.append(candidate)
 
     return refined
@@ -367,9 +378,10 @@ def _choose_end_point(
     preferred_end: float,
     min_duration: int,
     max_duration: int,
+    max_end_extension: float,
 ) -> BoundaryPoint | None:
     minimum_end = new_start + min_duration
-    maximum_end = new_start + max_duration
+    maximum_end = new_start + max_duration + max(0.0, max_end_extension)
     nearby = [
         point
         for point in points
@@ -407,6 +419,7 @@ def _refine_with_cues(
     min_duration: int,
     target_duration: int,
     max_duration: int,
+    max_end_extension: float,
     pre_padding: float,
     post_padding: float,
 ) -> list[ReelCandidate]:
@@ -438,10 +451,11 @@ def _refine_with_cues(
             last += 1
             new_end = next_end
 
-        # Never stop on an obviously unfinished cue when a natural end is nearby.
+        # Never stop on an unfinished cue. A complete sentence may exceed the
+        # nominal maximum by a small, explicit extension (default: 2 seconds).
         while last + 1 < len(cues) and not _cue_is_complete_end(cues, last):
             next_end = min(video_end, cues[last + 1].end + post_padding)
-            if next_end - new_start > max_duration:
+            if next_end - new_start > max_duration + max(0.0, max_end_extension):
                 break
             last += 1
             new_end = next_end
@@ -464,7 +478,7 @@ def _refine_with_cues(
             *(f"start:{reason}" for reason in start_reasons),
             *(f"end:{reason}" for reason in end_reasons),
         ]
-        _mark_boundary_result(candidate, original_start, original_end, min_duration, max_duration)
+        _mark_boundary_result(candidate, original_start, original_end, min_duration, max_duration, max_end_extension)
         refined.append(candidate)
 
     return refined
@@ -531,19 +545,22 @@ def _mark_boundary_result(
     original_end: float,
     min_duration: int,
     max_duration: int,
+    max_end_extension: float,
 ) -> None:
     candidate.warnings = [
         warning
         for warning in candidate.warnings
-        if warning not in {"too_short", "too_long", "boundary_low_confidence"}
+        if warning not in {"too_short", "too_long", "extended_for_complete_sentence", "boundary_low_confidence"}
     ]
     changed = abs(candidate.start - original_start) > 0.05 or abs(candidate.end - original_end) > 0.05
     if changed and "boundary_refined" not in candidate.warnings:
         candidate.warnings.append("boundary_refined")
     if candidate.duration < min_duration:
         candidate.warnings.append("too_short")
-    if candidate.duration > max_duration:
+    if candidate.duration > max_duration + max(0.0, max_end_extension):
         candidate.warnings.append("too_long")
+    elif candidate.duration > max_duration:
+        candidate.warnings.append("extended_for_complete_sentence")
     if candidate.boundary_score is not None and candidate.boundary_score < 45.0:
         candidate.warnings.append("boundary_low_confidence")
     end_reasons = [reason for reason in candidate.boundary_reasons if reason.startswith("end:")]

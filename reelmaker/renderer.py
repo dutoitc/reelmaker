@@ -15,6 +15,7 @@ from .subtitles import cues_for_segments, split_cues_for_display, write_srt
 from .timecode import format_hms
 from .utils import run_command, write_json
 from .vision import CropHint
+from .visual_text import detect_visual_text
 
 
 def _ass_time(seconds: float) -> str:
@@ -36,14 +37,19 @@ def _ass_escape(text: str) -> str:
     return text
 
 
+def _wrap_ass_lines(text: str, *, width: int = 24) -> list[str]:
+    return textwrap.wrap(
+        _ass_escape(text),
+        width=max(8, width),
+        break_long_words=False,
+        break_on_hyphens=False,
+        replace_whitespace=False,
+    )
+
+
 def _wrap_ass(text: str, *, width: int = 24, max_lines: int = 2) -> str:
-    wrapped = textwrap.wrap(_ass_escape(text), width=width, break_long_words=False, replace_whitespace=False)
-    if not wrapped:
-        return ""
-    if len(wrapped) > max_lines:
-        wrapped = wrapped[:max_lines]
-        wrapped[-1] = wrapped[-1].rstrip(" .,;:") + "..."
-    return r"\N".join(wrapped)
+    # max_lines is retained for API compatibility, but text is never truncated.
+    return r"\N".join(_wrap_ass_lines(text, width=width))
 
 
 def write_ass_subtitles(
@@ -56,7 +62,9 @@ def write_ass_subtitles(
     max_lines: int = 2,
     play_res_x: int = 1080,
     play_res_y: int = 1920,
+    position: str = "bottom",
 ) -> None:
+    alignment = 8 if position == "top" else 2
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {play_res_x}
@@ -66,16 +74,27 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Reel,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,1,2,80,80,{margin_v},1
+Style: Reel,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,1,{alignment},80,80,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header.rstrip()]
     for cue in cues:
-        text = _wrap_ass(cue.text, width=wrap_width, max_lines=max_lines)
-        if not text:
+        wrapped_lines = _wrap_ass_lines(cue.text, width=wrap_width)
+        if not wrapped_lines:
             continue
+        effective_size = font_size
+        if len(wrapped_lines) > max(1, max_lines):
+            effective_size = max(34, int(round(font_size * max_lines / len(wrapped_lines))))
+        longest_line = max(len(line) for line in wrapped_lines)
+        if longest_line > wrap_width:
+            effective_size = min(
+                effective_size,
+                max(28, int(round(font_size * wrap_width / longest_line))),
+            )
+        prefix = rf"{{\fs{effective_size}}}" if effective_size != font_size else ""
+        text = prefix + r"\N".join(wrapped_lines)
         lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Reel,,0,0,0,,{text}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -95,9 +114,9 @@ def write_end_card_ass(
     Long end cards are unreadable on Reels/TikTok. The default keeps only a
     clear CTA plus one small hint. The episode title is optional and smaller.
     """
-    cta = (cta or "Suite sur YouTube").strip()
+    cta = (cta or "Voir sur YouTube").strip()
     episode_title = episode_title.strip()
-    comment_text = (comment_text or "Voir commentaire").strip()
+    comment_text = (comment_text or "").strip()
 
     events: list[tuple[str, float, int, str]] = []
     if style == "none":
@@ -397,6 +416,45 @@ def _render_scene_aware_content(
     return True, warnings, ""
 
 
+
+def _resolve_subtitle_position(
+    *,
+    source_video: Path,
+    source_segments,
+    requested: str,
+) -> tuple[str, dict[str, float | int | str]]:
+    if requested in {"top", "bottom"}:
+        return requested, {"mode": requested, "detected": 0}
+
+    analyses = [
+        detect_visual_text(
+            source_video=source_video,
+            start=segment.start,
+            duration=segment.duration,
+        )
+        for segment in source_segments
+        if segment.duration > 0
+    ]
+    if not analyses:
+        return "bottom", {"mode": "auto", "detected": 0}
+
+    top = max(item.top for item in analyses)
+    middle = max(item.middle for item in analyses)
+    bottom = max(item.bottom for item in analyses)
+    total = max(item.total for item in analyses)
+    frames = sum(item.frames for item in analyses)
+    representative = max(analyses, key=lambda item: item.total)
+    position = representative.preferred_subtitle_position
+    return position, {
+        "mode": "auto",
+        "position": position,
+        "top": round(top, 4),
+        "middle": round(middle, 4),
+        "bottom": round(bottom, 4),
+        "total": round(total, 4),
+        "frames": frames,
+    }
+
 def render_reel(
     *,
     source_video: Path,
@@ -408,17 +466,19 @@ def render_reel(
     subtitle_margin_v: int = 150,
     subtitle_wrap_width: int = 23,
     subtitle_max_lines: int = 2,
+    subtitle_position: str = "auto",
     subtitle_correction: str = "basic",
+    correction_dictionary: Path | None = None,
     subtitle_correction_client: OllamaClient | None = None,
     force_subtitle_correction: bool = False,
     crop_mode: str = "smart",
     scenes: list[Scene] | None = None,
     fps: int = 25,
-    end_card_seconds: float = 0.0,
+    end_card_seconds: float = 1.5,
     end_card_style: str = "short",
-    end_card_comment_text: str = "Voir commentaire",
+    end_card_comment_text: str = "",
     episode_title: str = "",
-    youtube_cta: str = "Suite sur YouTube",
+    youtube_cta: str = "Voir sur YouTube",
     youtube_url: str = "",
     crf: int = 20,
     preset: str = "medium",
@@ -436,11 +496,17 @@ def render_reel(
         episode_title=episode_title,
         client=subtitle_correction_client,
         cache_path=reel_dir / "subtitles_corrected.json",
+        dictionary_path=correction_dictionary,
         force=force_subtitle_correction,
     )
     display_cues = split_cues_for_display(
         corrected_cues,
         max_chars=max(12, subtitle_wrap_width * subtitle_max_lines),
+    )
+    subtitle_position_resolved, subtitle_layout = _resolve_subtitle_position(
+        source_video=source_video,
+        source_segments=source_segments,
+        requested=subtitle_position,
     )
     srt_path = reel_dir / "subtitles.srt"
     ass_path = reel_dir / "subtitles.ass"
@@ -452,12 +518,13 @@ def render_reel(
         margin_v=subtitle_margin_v,
         wrap_width=subtitle_wrap_width,
         max_lines=subtitle_max_lines,
+        position=subtitle_position_resolved,
     )
 
     caption_path = reel_dir / "caption.txt"
     caption_parts = [selection.hook, selection.title]
     if episode_title:
-        caption_parts.append(f"Suite sur YouTube : {episode_title}")
+        caption_parts.append(f"Voir sur YouTube : {episode_title}")
     if youtube_url:
         caption_parts.append(youtube_url)
     caption_parts.append("#reels #tiktok #shorts")
@@ -495,6 +562,9 @@ def render_reel(
     metadata["end_card_seconds"] = end_card_seconds
     metadata["end_card_style"] = end_card_style
     metadata["subtitle_correction"] = subtitle_correction
+    metadata["subtitle_position"] = subtitle_position_resolved
+    metadata["subtitle_layout_analysis"] = subtitle_layout
+    metadata["correction_dictionary"] = str(correction_dictionary) if correction_dictionary else "built-in"
     metadata["crop_mode"] = crop_mode
     metadata["source_segments"] = [segment.to_dict() for segment in source_segments]
     metadata["framing_plan"] = [segment.to_dict() for segment in framing_plan]
@@ -524,6 +594,8 @@ def render_reel(
         ),
         "framing_segments": len(framing_plan),
         "subtitle_correction": subtitle_correction,
+        "subtitle_position": subtitle_position_resolved,
+        "subtitle_layout_analysis": subtitle_layout,
         "status": "ok",
         "warnings": [],
     }
@@ -628,17 +700,19 @@ def render_reels(
     subtitle_margin_v: int = 150,
     subtitle_wrap_width: int = 23,
     subtitle_max_lines: int = 2,
+    subtitle_position: str = "auto",
     subtitle_correction: str = "basic",
+    correction_dictionary: Path | None = None,
     subtitle_correction_client: OllamaClient | None = None,
     force_subtitle_correction: bool = False,
     crop_mode: str = "smart",
     scenes: list[Scene] | None = None,
     fps: int = 25,
-    end_card_seconds: float = 0.0,
+    end_card_seconds: float = 1.5,
     end_card_style: str = "short",
-    end_card_comment_text: str = "Voir commentaire",
+    end_card_comment_text: str = "",
     episode_title: str = "",
-    youtube_cta: str = "Suite sur YouTube",
+    youtube_cta: str = "Voir sur YouTube",
     youtube_url: str = "",
     crf: int = 20,
     preset: str = "medium",
@@ -659,7 +733,9 @@ def render_reels(
                 subtitle_margin_v=subtitle_margin_v,
                 subtitle_wrap_width=subtitle_wrap_width,
                 subtitle_max_lines=subtitle_max_lines,
+                subtitle_position=subtitle_position,
                 subtitle_correction=subtitle_correction,
+                correction_dictionary=correction_dictionary,
                 subtitle_correction_client=subtitle_correction_client,
                 force_subtitle_correction=force_subtitle_correction,
                 crop_mode=crop_mode,

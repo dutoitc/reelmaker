@@ -269,21 +269,22 @@ def split_cues_for_display(
             chunks.append(" ".join(current))
 
         duration = max(0.0, cue.end - cue.start)
-        if len(chunks) <= 1 or duration < min_chunk_duration * len(chunks):
+        if len(chunks) <= 1 or duration <= 0.0:
             result.append(SubtitleCue(len(result) + 1, cue.start, cue.end, text))
             continue
 
-        total_weight = sum(max(1, len(chunk)) for chunk in chunks)
-        cursor = cue.start
-        for chunk_index, chunk in enumerate(chunks):
-            if chunk_index == len(chunks) - 1:
-                chunk_end = cue.end
-            else:
-                share = duration * (max(1, len(chunk)) / total_weight)
-                chunk_end = min(cue.end, cursor + max(min_chunk_duration, share))
-            if chunk_end > cursor:
-                result.append(SubtitleCue(len(result) + 1, cursor, chunk_end, chunk))
-            cursor = chunk_end
+        # Never keep an overlong caption merely because its source timing is
+        # short. Every word is preserved and the available duration is divided
+        # proportionally. Very short chunks may be quick, but no text is cut.
+        weights = [max(1, len(chunk)) for chunk in chunks]
+        total_weight = sum(weights)
+        elapsed_weight = 0
+        for chunk_index, (chunk, weight) in enumerate(zip(chunks, weights)):
+            chunk_start = cue.start + duration * (elapsed_weight / total_weight)
+            elapsed_weight += weight
+            chunk_end = cue.end if chunk_index == len(chunks) - 1 else cue.start + duration * (elapsed_weight / total_weight)
+            if chunk_end > chunk_start:
+                result.append(SubtitleCue(len(result) + 1, chunk_start, chunk_end, chunk))
 
     return result
 

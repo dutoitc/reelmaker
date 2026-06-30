@@ -155,7 +155,14 @@ def build_chunk_prompt(
     return f"""/no_think
 Tu es un monteur editorial specialise en Instagram Reels, TikTok et YouTube Shorts.
 
-Objectif: creer des reels autonomes et interessants a partir d'une video longue.
+Objectif: trouver des mini-histoires autonomes, marquantes et partageables a partir d'une video longue.
+
+Un candidat n'est valable que s'il possede un angle editorial precis. Il doit contenir au moins un element fort:
+- fait surprenant ou contre-intuitif;
+- chiffre, date, comparaison ou consequence concrete;
+- reponse claire a une question que le public peut se poser;
+- transformation, probleme puis solution, ou tension puis conclusion;
+- detail local, humain ou visuel que l'on retient apres le visionnage.
 
 Regles strictes:
 - Utilise UNIQUEMENT le transcript fourni.
@@ -165,18 +172,23 @@ Regles strictes:
 - Les 3 premieres secondes doivent contenir une information, une surprise ou une question forte.
 - Le reel doit se terminer sur une phrase complete ou une conclusion naturelle.
 - Duree totale cible: {min_duration} a {max_duration} secondes, idealement 20 a 35 secondes.
-- Evite les extraits qui ne sont qu'un morceau arbitraire de la video.
+- REJETTE les extraits simplement informatifs, generiques ou sans conclusion memorable.
+- REJETTE les extraits qui ne sont qu'un morceau arbitraire de la video.
 - Evite les introductions vagues, repetitions, salutations et transitions techniques.
 - Ne propose pas deux reels quasi identiques.
+- Le hook doit annoncer la promesse reelle du contenu, sans inventer ni exagérer.
+- Privilegie la densite: chaque phrase doit faire avancer l'idee.
 {montage_rules}- Reponds uniquement avec UN objet JSON valide, sans markdown ni commentaire.
 - Limite les champs texte a des phrases courtes.
 
 Criteres de score /10:
-- Valeur concrete, surprenante ou emotionnelle: 30%
-- Accroche des 3 premieres secondes: 25%
-- Autonomie et progression narrative: 25%
-- Fin naturelle: 15%
-- Potentiel commentaire/partage: 5%
+- Force de l'idee et caractere memorable: 30%
+- Specificite (faits, consequences, exemples): 20%
+- Accroche des 3 premieres secondes: 20%
+- Progression narrative et autonomie: 20%
+- Fin naturelle et satisfaisante: 10%
+
+N'attribue pas plus de 7/10 a un extrait generique ou sans payoff clair.
 
 Format JSON attendu pour un passage continu:
 {{
@@ -335,10 +347,10 @@ def generate_candidates(
 
     for pos, chunk in enumerate(chunks, start=1):
         if composition_mode == "contiguous":
-            raw_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.txt"
-            candidates_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.candidates.json"
+            raw_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.impact_v2.txt"
+            candidates_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.impact_v2.candidates.json"
         else:
-            cache_suffix = composition_mode.replace("-", "_")
+            cache_suffix = composition_mode.replace("-", "_") + ".impact_v2"
             raw_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.{cache_suffix}.txt"
             candidates_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.{cache_suffix}.candidates.json"
 
@@ -426,6 +438,122 @@ def generate_candidates(
 
 
 
+def generate_global_composite_candidates(
+    cues: list[SubtitleCue],
+    client: OllamaClient,
+    logs_dir: Path,
+    *,
+    max_candidates: int = 3,
+    min_duration: int = 18,
+    max_duration: int = 60,
+    resume: bool = True,
+    force_ollama: bool = False,
+    max_transcript_chars: int = 48000,
+) -> list[ReelCandidate]:
+    """Ask for cross-video montages that chunk-local analysis cannot discover."""
+    if max_candidates <= 0 or not cues:
+        return []
+    transcript = "\n".join(
+        f"[{format_hms(cue.start)}-{format_hms(cue.end)}] {cue.text}"
+        for cue in cues
+    )
+    if len(transcript) > max_transcript_chars:
+        print("Global composite analysis skipped: transcript too long for a safe local-model request")
+        return []
+
+    chunk = TranscriptChunk(
+        index=0,
+        start=cues[0].start,
+        end=cues[-1].end,
+        text=transcript,
+        cue_indexes=[cue.index for cue in cues],
+    )
+    raw_path = logs_dir / "ollama_global_composites.impact_v2.txt"
+    candidates_path = logs_dir / "ollama_global_composites.impact_v2.candidates.json"
+
+    if resume and not force_ollama:
+        cached = _load_cached_candidates(candidates_path)
+        if cached:
+            print(f"Global composite analysis: {len(cached)} candidates - cache")
+            return cached
+
+    prompt = f"""/no_think
+Tu es le redacteur en chef d'une chaine video locale. Tu disposes du transcript COMPLET.
+
+Construis jusqu'a {max_candidates} reels marquants en combinant 2 ou 3 passages non contigus.
+Chaque montage doit former une mini-histoire plus forte qu'un extrait continu:
+1. une accroche concrete ou surprenante;
+2. une explication qui apporte une information nouvelle;
+3. une conclusion, consequence ou payoff memorable.
+
+Regles absolues:
+- utilise uniquement les paroles et timecodes fournis;
+- n'invente aucune transition, aucun fait ni conclusion;
+- les passages doivent traiter exactement du meme angle;
+- evite les montages qui ressemblent a une compilation aleatoire;
+- termine chaque segment sur une phrase ou une pause naturelle;
+- duree totale: {min_duration} a {max_duration} secondes;
+- rejette les sujets generiques sans surprise, consequence ou detail concret;
+- reponds uniquement avec l'objet JSON demande.
+
+Format attendu:
+{{
+  "candidates": [
+    {{
+      "start_time": "00:00:10,000",
+      "end_time": "00:03:20,000",
+      "segments": [
+        {{"start_time": "00:00:10,000", "end_time": "00:00:18,000"}},
+        {{"start_time": "00:02:20,000", "end_time": "00:02:34,000"}}
+      ],
+      "title": "Titre court",
+      "hook": "Promesse exacte et forte",
+      "reason": "Angle, progression et payoff",
+      "score": 8.5,
+      "transcript_excerpt": "Resume fidele des passages choisis"
+    }}
+  ]
+}}
+
+Transcript complet:
+{transcript}
+"""
+    try:
+        raw = client.generate(
+            prompt,
+            json_schema=candidate_response_schema(max_candidates=max_candidates, allow_montage=True),
+        )
+    except RuntimeError as exc:
+        raw_path.with_suffix(".error.txt").write_text(str(exc), encoding="utf-8")
+        print(f"Global composite analysis skipped: {exc}")
+        return []
+    raw_path.write_text(raw, encoding="utf-8")
+    try:
+        payload = parse_json_loose(raw)
+        candidates = _candidates_from_payload(
+            payload,
+            chunk=chunk,
+            start_index=1,
+            min_duration=min_duration,
+            max_duration=max_duration,
+            composition_mode="hybrid",
+        )
+    except Exception as exc:
+        candidates_path.with_suffix(".error.txt").write_text(str(exc), encoding="utf-8")
+        return []
+
+    composites: list[ReelCandidate] = []
+    for candidate in candidates:
+        if not candidate.is_composite:
+            continue
+        if "global_composite" not in candidate.warnings:
+            candidate.warnings.append("global_composite")
+        composites.append(candidate)
+    write_json(candidates_path, [candidate.to_dict() for candidate in composites])
+    print(f"Global composite analysis: {len(composites)} candidates")
+    return composites
+
+
 def build_ranking_prompt(candidates: list[ReelCandidate], *, shortlist_count: int, target_count: int) -> str:
     compact = [
         {
@@ -455,8 +583,10 @@ Règles strictes:
 - Sélectionne les meilleurs extraits déjà proposés.
 - Évite les doublons thématiques.
 - Vise une série finale de {target_count} reels, mais retourne une shortlist de {shortlist_count} pour validation humaine.
-- Favorise les extraits autonomes, concrets, avec une accroche forte.
-- Pénalise les candidats marqués too_short, too_long ou outside_source_chunk.
+- Favorise les extraits autonomes, spécifiques, surprenants ou émotionnels, avec un payoff clair.
+- Favorise les montages recomposes lorsqu'ils créent une vraie progression et restent naturels.
+- Pénalise fortement les idées génériques, les simples bouts d'interview et les candidats sans conclusion mémorable.
+- Pénalise les candidats marqués too_short, too_long, boundary_incomplete_end ou outside_source_chunk.
 - Réponds uniquement avec UN objet JSON valide.
 - Ne mets aucun texte avant ou après le JSON.
 - Ne mets pas de markdown.
@@ -487,14 +617,26 @@ def local_rank_candidates(candidates: list[ReelCandidate], *, shortlist_count: i
             penalty += 2.0
         if "too_long" in candidate.warnings:
             penalty += 1.0
+        if "boundary_incomplete_end" in candidate.warnings:
+            penalty += 2.5
         # A boundary-refined candidate is not a quality problem; it is expected
         # with small local models.
-        soft_warning_count = len([w for w in candidate.warnings if w not in {"boundary_refined", "composite_montage"}])
+        soft_warning_count = len([
+            warning
+            for warning in candidate.warnings
+            if warning not in {
+                "boundary_refined",
+                "composite_montage",
+                "global_composite",
+                "extended_for_complete_sentence",
+            }
+        ])
         ideal_duration = 22.0
         duration_penalty = min(1.0, abs(candidate.duration - ideal_duration) * 0.025)
         content_bonus = 0.25 if candidate.hook else 0.0
         content_bonus += 0.15 if candidate.reason else 0.0
-        content_bonus += 0.25 if candidate.is_composite else 0.0
+        content_bonus += 0.35 if candidate.is_composite else 0.0
+        content_bonus += 0.35 if "global_composite" in candidate.warnings else 0.0
         boundary_bonus = ((candidate.boundary_score or 50.0) - 50.0) / 100.0
         return (
             candidate.score - penalty - duration_penalty + content_bonus + boundary_bonus,
@@ -525,7 +667,7 @@ def rank_candidates(
         print(f"Local ranking: {len(preselected)} candidates")
         return preselected[:shortlist_count]
 
-    cache_path = logs_dir / "ollama_ranking.selected.json"
+    cache_path = logs_dir / "ollama_ranking.impact_v2.selected.json"
     if resume and not force_ollama:
         cached = _load_cached_candidates(cache_path)
         if cached:
@@ -605,10 +747,15 @@ def interactive_select(shortlist: list[ReelCandidate], *, target_count: int) -> 
 
     cprint("\nShortlist IA:\n")
     for idx, candidate in enumerate(shortlist, start=1):
-        visible_warnings = [w for w in candidate.warnings if w != "boundary_refined"]
+        visible_warnings = [
+            warning
+            for warning in candidate.warnings
+            if warning not in {"boundary_refined", "composite_montage", "global_composite", "extended_for_complete_sentence"}
+        ]
         warn = f" [WARN {','.join(visible_warnings)}]" if visible_warnings else ""
         refined = " [expanded]" if "boundary_refined" in candidate.warnings else ""
-        montage = f" [montage {len(candidate.source_segments)} plans]" if candidate.is_composite else ""
+        montage_label = "montage global" if "global_composite" in candidate.warnings else "montage"
+        montage = f" [{montage_label} {len(candidate.source_segments)} plans]" if candidate.is_composite else ""
         boundary = (
             f" | cut {candidate.boundary_score:.0f}/100 {candidate.boundary_method}"
             if candidate.boundary_score is not None

@@ -14,88 +14,81 @@
 - punctuation and cue fallback;
 - `--boundary-mode auto|words|cues|off`.
 
-### 0.5.0 — scene-aware framing
+### 0.5.0 / 0.5.1 — scene framing and reliable Ollama JSON
 
-- PySceneDetect adapter and `scenes.json`;
-- isolated `framing.py` decisions;
-- `--crop-mode scene-smart`;
-- per-shot FFmpeg rendering and final subtitle pass.
+- PySceneDetect and per-shot framing;
+- `scene-smart` rendering;
+- `think=false`, structured JSON Schema outputs, and diagnostics.
 
-### 0.5.1 — reliable Ollama JSON
+### 0.6.0 — desktop workflow and first quality safeguards
 
-- explicit `think=false`;
-- JSON Schema outputs;
-- deterministic non-streaming structured requests;
-- actionable parsing diagnostics.
+- PySide6 Windows GUI;
+- progress and multi-run ETA history;
+- hybrid two/three-passage montage;
+- fit-blur, subtitle correction, and explicit render failures.
 
-### 0.6.0 — usable desktop workflow and quality safeguards
+### 0.7.0 — real-output stabilization and stronger editorial selection
 
-- optional PySide6 Windows GUI;
-- progress JSON events and local multi-run ETA history;
-- hybrid two/three-passage editorial montage;
-- composite segment/subtitle rendering;
-- stronger natural endings;
-- fit-blur preservation for two-person/wide shots;
-- contextual subtitle correction by default;
-- complete subtitle display and explicit render failure rules;
-- dependency preflight and zero-video failure;
-- local `run_*` scripts ignored and excluded from archives.
+- subtitle text is never truncated;
+- automatic subtitle placement away from existing source text;
+- title cards and embedded text preserved with fit-blur;
+- two-person shots preserve both people;
+- French/Nord-vaudois correction dictionary;
+- sentence-complete endings with a controlled two-second extension;
+- full-transcript composite montage pass;
+- stronger impact-oriented generation/ranking;
+- quality/fast GUI profile;
+- default `Voir sur YouTube` end card.
 
-## Validation gate for 0.6.x
+## Validation gate for 0.7.x
 
-Before another large feature, test the same real reportages through:
+Test at least two real reportages with:
 
 ```bash
---composition-mode contiguous
 --composition-mode hybrid
---crop-mode smart
+--ranking-mode ollama
 --crop-mode scene-smart
+--subtitle-position auto
 --subtitle-correction ollama
 ```
 
 Record observations for:
 
-- first/last spoken words;
-- grammatical/substantive subtitle accuracy;
-- two-person interviews;
-- landscapes, monuments, slides, and full-screen wide visuals;
-- editorial coherence of recomposed reels;
-- missing/failed render outputs;
-- ETA accuracy after two or three runs.
+- no generated word missing or replaced by ellipsis;
+- no overlay on existing captions/lower thirds;
+- title cards and wide graphics fully visible;
+- two-person interviews fully visible;
+- correct local names;
+- complete final sentences;
+- editorial strength of continuous and global-composite proposals;
+- ETA accuracy after several runs.
 
-## Candidate iteration 0.6.1 — observed defect stabilization
+## Candidate iteration 0.7.1 — tuning from real footage
 
-Only after real-video feedback:
+Only after inspecting output metadata and examples:
 
-- tune incomplete-ending thresholds;
-- tune fit-blur vs crop decisions;
-- improve subtitle correction cache/errors;
-- improve GUI diagnostics and progress granularity;
-- fingerprint candidate caches more completely if stale results appear.
+- tune OpenCV text-detection thresholds;
+- tune subtitle top/bottom margins;
+- tune global montage context limit and number of candidates;
+- add dictionary entries observed in real transcripts;
+- improve diagnostics for rejected/incomplete candidates.
 
-## Candidate iteration 0.7 — active speaker and person tracking
+## Candidate iteration 0.8 — active speaker and person tracking
 
-Refactoring checkpoint: do not add this directly to `vision.py` if it becomes a full tracking subsystem.
+Refactoring checkpoint: create a dedicated tracking subsystem rather than expanding `vision.py` indefinitely.
 
 - stronger face/person detector;
 - track people across a shot;
-- use audio/speaker timing where possible;
-- crop the active speaker only when confidence is high;
+- associate speaker timing with visible people when confidence is high;
+- crop the active speaker only at high confidence;
 - preserve both people otherwise.
-
-## Candidate iteration 0.8 — global editorial montage
-
-- summarize topics across all transcript chunks;
-- propose complementary passages across the complete programme;
-- require coherent hook/explanation/conclusion;
-- reject repetitions and factual discontinuities;
-- expose source segments clearly for review.
 
 ## Candidate iteration 0.9 — beautiful views and B-roll
 
 - representative frames per scene;
 - blur/exposure/stability scores;
 - semantic relevance between transcript and shots;
+- detect and propose strong scenic inserts;
 - human validation before automatic insertion.
 
 ## Candidate iteration 1.0 — music

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 
+from .visual_text import score_text_bands
+
 
 @dataclass(frozen=True)
 class CropHint:
@@ -151,6 +153,13 @@ def detect_smart_crop_hint(
     if not frames:
         return CropHint(None, "no_frames", 0.0)
 
+    # Preserve full-width title cards, lower thirds and already burned captions.
+    # Cropping those frames destroys words even when a face or motion detector
+    # would otherwise choose a narrow 9:16 region.
+    text_scores = score_text_bands(frames, cv2=cv2)
+    if mode == "smart" and text_scores.has_text and source_width / source_height > target_width / target_height:
+        return CropHint(None, "embedded_text_preserved", min(1.0, text_scores.total), "fit-blur")
+
     if mode in {"face", "smart"}:
         face_hint = _detect_face_hint_from_frames(
             frames,
@@ -160,8 +169,15 @@ def detect_smart_crop_hint(
             target_width=target_width,
             target_height=target_height,
         )
-        if mode == "face" or face_hint.crop_x is not None:
+        if mode == "face" or face_hint.crop_x is not None or face_hint.layout == "fit-blur":
             return face_hint
+
+    # In automatic mode, a wide frame without a confidently detected face is
+    # preserved. Camera movement is not enough evidence to crop away people,
+    # scenery, title graphics, or contextual objects. Users can still request
+    # --crop-mode motion explicitly.
+    if mode == "smart" and source_width / source_height > target_width / target_height:
+        return CropHint(None, "wide_without_reliable_face_preserved", 0.55, "fit-blur")
 
     if mode in {"motion", "smart"}:
         motion_hint = _detect_motion_hint_from_frames(
@@ -226,10 +242,6 @@ def _detect_face_hint_from_frames(
         representative = sorted(representative, key=lambda rect: rect[2] * rect[3], reverse=True)
         largest_area = representative[0][2] * representative[0][3]
         second_area = representative[1][2] * representative[1][3]
-        crop_source_width = source_height * (target_width / target_height)
-        left = min(x for x, _y, _w, _h in representative)
-        right = max(x + w for x, _y, w, _h in representative)
-        span = right - left
 
         # If one face clearly dominates, isolate it. Otherwise preserve both
         # people with a blurred background instead of cutting both faces.
@@ -243,18 +255,10 @@ def _detect_face_hint_from_frames(
                 target_height=target_height,
             )
             return CropHint(crop_x, "dominant_face", confidence, "crop")
-        if span > crop_source_width * 0.9:
-            return CropHint(None, "wide_two_person_shot", confidence, "fit-blur")
-
-        crop_x = _crop_x_for_span(
-            left,
-            right,
-            source_width=source_width,
-            source_height=source_height,
-            target_width=target_width,
-            target_height=target_height,
-        )
-        return CropHint(crop_x, f"faces_group_{frames_with_faces}_samples", confidence, "crop")
+        # Two similarly important people are preserved in full. A narrow 9:16
+        # crop is too fragile: it can cut shoulders, gestures or one face when
+        # either person moves between samples.
+        return CropHint(None, "two_person_shot_preserved", confidence, "fit-blur")
 
     center_x = float(median(weighted_centers))
     crop_x = _crop_x_from_center(

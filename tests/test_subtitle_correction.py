@@ -3,7 +3,7 @@ from reelmaker.models import SubtitleCue
 
 
 def test_basic_subtitle_correction_spacing_and_case():
-    assert correct_text_basic(" les eclosons  ne sont pas tout au meme temps ! ") == "Les eclosions ne sont pas tout au meme temps!"
+    assert correct_text_basic(" les eclosons  ne sont pas tout au meme temps ! ") == "Les éclosions ne sont pas tout au meme temps!"
 
 
 def test_basic_cue_correction_keeps_timing():

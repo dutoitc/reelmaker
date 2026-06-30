@@ -52,14 +52,14 @@ Explain the concrete stability benefit and obtain objective validation before a 
 
 ## Current strategic direction
 
-Version 0.6.0 adds the GUI, timing history, composite montage, fit-blur framing, stronger boundaries, and subtitle/render safeguards.
+Version 0.7.0 adds non-truncating subtitles, automatic subtitle placement, embedded-text/two-person preservation, a correction dictionary, sentence-complete extensions, and global composite selection.
 
 Preferred sequence:
 
-1. validate the real Luzerne output in hybrid + scene-smart + Ollama subtitle mode;
-2. inspect `selected_reels.json`, each reel `metadata.json`, and `render_report.json`;
-3. tune only defects observed in real footage;
-4. choose between active-speaker tracking, global montage, or aesthetic/B-roll scoring;
+1. validate real Xplore output in quality + hybrid + scene-smart + automatic subtitle-position mode;
+2. inspect `selected_reels.json`, subtitle files, each reel `metadata.json`, and `render_report.json`;
+3. tune text-detection, dictionary, boundary, and global-montage thresholds only from observed examples;
+4. next choose active-speaker tracking or aesthetic/B-roll scoring;
 5. refactor renderer responsibilities before adding music.
 
-Known limitation: ambiguous two-person shots preserve both people with fit-blur; active-speaker localization is not implemented yet.
+Known limitations: existing-text detection is not OCR; active-speaker localisation is not implemented; ambiguous two-person shots preserve both people with fit-blur.

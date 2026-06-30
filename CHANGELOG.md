@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0 — 2026-06-30
+
+- Removed ASS subtitle truncation; every generated word is preserved, with timed cue splitting and font reduction when needed.
+- Added `--subtitle-position auto|top|bottom`; automatic mode samples the selected video ranges and avoids lower-thirds or captions already burned into the source.
+- Added lightweight embedded-text detection and preserves title cards/full-width graphics with `fit-blur` instead of destructive 9:16 crops.
+- Changed ambiguous two-person shots to preserve both people with `fit-blur`; active-speaker identity is never guessed.
+- Added a packaged French/Nord-vaudois correction dictionary plus optional `--correction-dictionary` overrides.
+- Added the requested local place names, including Orbe, Agiez, Arnex, Vallorbe, Les Clées, Romainmôtier, Chavornay, Corcelles, Bavois, Valeyres, Rances, Baulmes and Champvent.
+- Allowed up to two extra seconds beyond the nominal maximum to finish a sentence naturally (`--max-end-extension`).
+- Added a structured full-transcript composition pass for coherent montages built from distant passages.
+- Strengthened candidate and ranking prompts to reject generic fragments without a specific idea or payoff.
+- Changed quality defaults to five candidates per block, three global montage candidates, and Ollama ranking.
+- Added a GUI editorial-quality profile and automatic subtitle-position control.
+- Enabled a 1.5-second `Voir sur YouTube` end card by default.
+- Versioned candidate/ranking cache filenames so old weaker analyses are not silently reused.
+- Expanded the suite to 53 passing tests; GUI smoke remains conditional on PySide6 being installed.
+
 ## 0.6.0 — 2026-06-30
 
 - Added an optional PySide6 Windows GUI with file selection, current stage, per-stage and overall progress, elapsed time, ETA, live console logs, cancellation, and output-folder access.

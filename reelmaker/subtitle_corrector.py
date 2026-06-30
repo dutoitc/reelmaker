@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 
+from .correction_dictionary import apply_correction_dictionary, dictionary_fingerprint_payload
 from .models import ReelSelection, SubtitleCue
 from .ollama_client import OllamaClient, parse_json_loose
 from .utils import read_json, write_json
@@ -39,35 +40,7 @@ def subtitle_response_schema(*, max_items: int) -> dict:
     }
 
 
-_COMMON_FIXES = {
-    "ecolosons": "eclosions",
-    "eclosons": "eclosions",
-    "eclosion": "eclosion",
-    "nichoire": "nichoir",
-    "hulote": "hulotte",
-    "hulotes": "hulottes",
-    "chouette hulote": "chouette hulotte",
-    "chouettes hulotes": "chouettes hulottes",
-    "bertran": "Bertrand",
-    "stephane": "Stephane",
-}
-
-
-def _preserve_case_replace(text: str, wrong: str, right: str) -> str:
-    pattern = re.compile(rf"\b{re.escape(wrong)}\b", flags=re.IGNORECASE)
-
-    def repl(match: re.Match[str]) -> str:
-        found = match.group(0)
-        if found.isupper():
-            return right.upper()
-        if found[:1].isupper():
-            return right[:1].upper() + right[1:]
-        return right
-
-    return pattern.sub(repl, text)
-
-
-def correct_text_basic(text: str) -> str:
+def correct_text_basic(text: str, *, dictionary_path: Path | None = None) -> str:
     """Lightweight subtitle cleanup without changing meaning.
 
     This is intentionally conservative: it fixes spacing, duplicated punctuation,
@@ -79,15 +52,21 @@ def correct_text_basic(text: str) -> str:
     text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
     text = re.sub(r"\s+(['’])\s+", r"\1", text)
     text = _MULTI_PUNCT_RE.sub(lambda m: m.group(1), text)
-    for wrong, right in _COMMON_FIXES.items():
-        text = _preserve_case_replace(text, wrong, right)
+    text = apply_correction_dictionary(text, dictionary_path)
     if text:
         text = text[0].upper() + text[1:]
     return text
 
 
-def correct_cues_basic(cues: list[SubtitleCue]) -> list[SubtitleCue]:
-    return [SubtitleCue(index=c.index, start=c.start, end=c.end, text=correct_text_basic(c.text)) for c in cues]
+def correct_cues_basic(
+    cues: list[SubtitleCue],
+    *,
+    dictionary_path: Path | None = None,
+) -> list[SubtitleCue]:
+    return [
+        SubtitleCue(index=c.index, start=c.start, end=c.end, text=correct_text_basic(c.text, dictionary_path=dictionary_path))
+        for c in cues
+    ]
 
 
 def _build_ollama_prompt(*, selection: ReelSelection, cues: list[SubtitleCue], episode_title: str) -> str:
@@ -129,13 +108,14 @@ Sous-titres JSON:
 """
 
 
-def _correction_fingerprint(cues: list[SubtitleCue], *, selection: ReelSelection, episode_title: str, model: str) -> str:
+def _correction_fingerprint(cues: list[SubtitleCue], *, selection: ReelSelection, episode_title: str, model: str, dictionary_path: Path | None) -> str:
     payload = {
         "cues": [{"index": c.index, "start": c.start, "end": c.end, "text": c.text} for c in cues],
         "selection": selection.to_dict(),
         "episode_title": episode_title,
         "model": model,
-        "schema": 2,
+        "dictionary": dictionary_fingerprint_payload(dictionary_path),
+        "schema": 3,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -148,6 +128,7 @@ def correct_cues_with_ollama(
     episode_title: str,
     client: OllamaClient,
     cache_path: Path,
+    dictionary_path: Path | None = None,
     force: bool = False,
 ) -> list[SubtitleCue]:
     if not cues:
@@ -157,6 +138,7 @@ def correct_cues_with_ollama(
         selection=selection,
         episode_title=episode_title,
         model=str(getattr(client, "model", "unknown")),
+        dictionary_path=dictionary_path,
     )
     if cache_path.exists() and not force:
         try:
@@ -185,9 +167,9 @@ def correct_cues_with_ollama(
     if not isinstance(items, list):
         raise ValueError("Subtitle correction response does not contain a subtitles list")
 
-    corrected = correct_cues_basic(cues)
+    corrected = correct_cues_basic(cues, dictionary_path=dictionary_path)
     by_index = {
-        int(item.get("index")): correct_text_basic(str(item.get("text") or ""))
+        int(item.get("index")): correct_text_basic(str(item.get("text") or ""), dictionary_path=dictionary_path)
         for item in items
         if isinstance(item, dict) and item.get("index") is not None
     }
@@ -215,12 +197,13 @@ def maybe_correct_cues(
     episode_title: str,
     client: OllamaClient | None,
     cache_path: Path,
+    dictionary_path: Path | None = None,
     force: bool = False,
 ) -> list[SubtitleCue]:
     if mode == "off":
         return cues
     if mode == "basic":
-        return correct_cues_basic(cues)
+        return correct_cues_basic(cues, dictionary_path=dictionary_path)
     if mode == "ollama":
         if client is None:
             raise ValueError("Ollama subtitle correction requires an OllamaClient")
@@ -231,9 +214,10 @@ def maybe_correct_cues(
                 episode_title=episode_title,
                 client=client,
                 cache_path=cache_path,
+                dictionary_path=dictionary_path,
                 force=force,
             )
         except Exception as exc:
             cache_path.with_suffix(".error.txt").write_text(str(exc), encoding="utf-8")
-            return correct_cues_basic(cues)
+            return correct_cues_basic(cues, dictionary_path=dictionary_path)
     raise ValueError(f"Unknown subtitle correction mode: {mode}")

@@ -91,7 +91,15 @@ class ReelmakerWindow(QMainWindow):
         form.addRow("Dossier de sortie", output_row)
 
         self.model_edit = QLineEdit(str(self.settings.value("model", "qwen3:4b")))
+        self.model_edit.setToolTip("qwen3:8b donne généralement de meilleurs choix éditoriaux si le temps de traitement est acceptable.")
         form.addRow("Modèle Ollama", self.model_edit)
+
+        self.quality_combo = QComboBox()
+        self.quality_combo.addItem("Qualité — plus de candidats + classement IA", "quality")
+        self.quality_combo.addItem("Rapide — moins de candidats + classement local", "fast")
+        saved_quality = str(self.settings.value("editorial_quality", "quality"))
+        self.quality_combo.setCurrentIndex(0 if saved_quality == "quality" else 1)
+        form.addRow("Sélection éditoriale", self.quality_combo)
 
         self.target_spin = QSpinBox()
         self.target_spin.setRange(1, 30)
@@ -114,6 +122,15 @@ class ReelmakerWindow(QMainWindow):
         self.subtitle_combo.addItems(["ollama", "basic", "off"])
         self.subtitle_combo.setCurrentText(str(self.settings.value("subtitle_correction", "ollama")))
         form.addRow("Correction des sous-titres", self.subtitle_combo)
+
+        self.subtitle_position_combo = QComboBox()
+        self.subtitle_position_combo.addItem("Automatique — évite le texte déjà présent", "auto")
+        self.subtitle_position_combo.addItem("Bas", "bottom")
+        self.subtitle_position_combo.addItem("Haut", "top")
+        saved_position = str(self.settings.value("subtitle_position", "auto"))
+        positions = ["auto", "bottom", "top"]
+        self.subtitle_position_combo.setCurrentIndex(positions.index(saved_position) if saved_position in positions else 0)
+        form.addRow("Position des sous-titres", self.subtitle_position_combo)
 
         self.force_checkbox = QCheckBox("Recalculer la transcription et l’analyse")
         form.addRow("Cache", self.force_checkbox)
@@ -212,8 +229,22 @@ class ReelmakerWindow(QMainWindow):
             str(self.composition_combo.currentData()),
             "--subtitle-correction",
             self.subtitle_combo.currentText(),
+            "--subtitle-position",
+            str(self.subtitle_position_combo.currentData()),
             "--progress-json",
         ]
+        if self.quality_combo.currentData() == "quality":
+            command.extend([
+                "--ranking-mode", "ollama",
+                "--candidates-per-chunk", "5",
+                "--global-composite-count", "3",
+            ])
+        else:
+            command.extend([
+                "--ranking-mode", "local",
+                "--candidates-per-chunk", "3",
+                "--global-composite-count", "0",
+            ])
         if self.force_checkbox.isChecked():
             command.extend(["--force-transcription", "--force-ollama", "--force-scene-detection", "--force-subtitle-correction"])
         return command
@@ -232,10 +263,12 @@ class ReelmakerWindow(QMainWindow):
         self.settings.setValue("video", str(video))
         self.settings.setValue("output", str(output))
         self.settings.setValue("model", self.model_edit.text().strip())
+        self.settings.setValue("editorial_quality", self.quality_combo.currentData())
         self.settings.setValue("target_count", self.target_spin.value())
         self.settings.setValue("crop_mode", self.crop_combo.currentText())
         self.settings.setValue("composition_mode", self.composition_combo.currentData())
         self.settings.setValue("subtitle_correction", self.subtitle_combo.currentText())
+        self.settings.setValue("subtitle_position", self.subtitle_position_combo.currentData())
 
         self.logs.clear()
         self.logs.appendPlainText("$ " + sys.executable + " " + " ".join(self._command()))

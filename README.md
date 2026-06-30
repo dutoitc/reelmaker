@@ -9,7 +9,7 @@ Generate several vertical reels from a long video with local tools:
 - **PySceneDetect** for optional shot detection and per-shot framing;
 - **PySide6** for the optional Windows desktop interface.
 
-Version **0.6.0** adds a Windows GUI, multi-run time estimates, composite reels, safer wide-shot framing, stronger spoken boundaries, and stricter subtitle/render validation.
+Version **0.7.0** hardens real-world output quality: no subtitle truncation, automatic avoidance of text already present in the video, preservation of two-person/title-card shots, a Nord-vaudois correction dictionary, sentence-complete endings, and a global editorial montage pass.
 
 ## Recommended environment
 
@@ -143,7 +143,7 @@ reelmaker-gui
 The interface provides:
 
 - MP4 and output-directory selection;
-- Ollama model, target count, crop mode, composition mode, and subtitle correction;
+- Ollama model, editorial quality profile, target count, crop mode, composition mode, subtitle correction, and automatic subtitle placement;
 - current stage and stage progress;
 - overall progress;
 - elapsed time;
@@ -206,8 +206,10 @@ python -m reelmaker all \
   --source-video "/c/Videos/reportage.mp4" \
   --model "qwen3:4b" \
   --target-count 6 \
-  --ranking-mode local \
+  --ranking-mode ollama \
   --composition-mode hybrid \
+  --candidates-per-chunk 5 \
+  --global-composite-count 3 \
   --crop-mode scene-smart \
   --subtitle-correction ollama \
   --output-dir "output/reportage"
@@ -238,7 +240,7 @@ Use the previous behaviour when required:
 --composition-mode contiguous
 ```
 
-Composite generation currently works within each transcript analysis chunk. A future global editorial pass may combine distant passages across the complete programme.
+In quality mode, Reelmaker also performs one structured **global composition pass** over the complete transcript. It can therefore combine complementary passages that are far apart in the original programme. Long transcripts that exceed the safe local-model context are skipped explicitly.
 
 ## Natural spoken boundaries
 
@@ -256,7 +258,7 @@ Reelmaker combines:
 4. optional speaker changes;
 5. a strong preference for a complete final sentence.
 
-Composite reels are refined segment by segment. A candidate receives `boundary_incomplete_end` when a confident natural ending cannot be found within the duration limit.
+Composite reels are refined segment by segment. The final cut may exceed `--max-duration` by up to `--max-end-extension` (default: 2 seconds) when this is required to finish a sentence. A candidate receives `boundary_incomplete_end` only when no confident natural ending is available even with that extension.
 
 Available modes:
 
@@ -283,11 +285,11 @@ Per-shot mode for reportages:
 
 `scene-smart` uses PySceneDetect, writes `scenes.json`, and recalculates framing for each detected shot.
 
-Framing safety rules in 0.6.0:
+Framing safety rules in 0.7.0:
 
 - one clearly dominant face can be isolated;
-- close faces can be kept in the same crop;
-- two similarly important people spread across a horizontal shot use a **fit-blur** layout so neither face is cut;
+- two similarly important people use a **fit-blur** layout so neither person is cut, even if a narrow crop might temporarily fit both faces;
+- title cards, lower thirds and frames containing detected embedded text use fit-blur so words are not cropped;
 - wide landscapes, monuments, slides, or full-screen visuals without a reliable subject also use fit-blur instead of an arbitrary destructive crop;
 - uncertain motion is no longer enough to force a crop.
 
@@ -504,3 +506,98 @@ bash scripts/check_project.sh
 ```
 
 The full environment currently runs 45 tests. The GUI smoke test is skipped automatically when PySide6 is not installed.
+
+
+## Subtitle and on-screen text safety
+
+Defaults:
+
+```bash
+--subtitle-correction ollama
+--subtitle-position auto
+--subtitle-max-lines 2
+```
+
+Rules in 0.7.0:
+
+- generated subtitle text is **never truncated with `...`**;
+- long cues are divided over their original timing while preserving every word;
+- if a cue still needs more lines, ASS font size is reduced rather than cutting text;
+- `--subtitle-position auto` samples the selected source images and moves generated subtitles to the top when existing lower-thirds or burned captions are detected;
+- title cards and frames containing embedded text are rendered with `fit-blur`, preserving the complete horizontal image;
+- two similarly important faces are also preserved with `fit-blur`; the tool does not guess the active speaker.
+
+Force a position when automatic detection is wrong:
+
+```bash
+--subtitle-position top
+--subtitle-position bottom
+```
+
+## French and Nord-vaudois correction dictionary
+
+The built-in dictionary is stored in:
+
+```text
+reelmaker/data/corrections_fr.json
+```
+
+It includes common ASR corrections and local names such as Orbe, Agiez, Arnex, Vallorbe, Les Clées, Romainmôtier, Chavornay, Corcelles, Bavois, Valeyres, Rances, Baulmes and Champvent.
+
+An optional project-specific JSON file can extend or override it:
+
+```bash
+python -m reelmaker all   --source-video "/c/Videos/reportage.mp4"   --correction-dictionary "config/corrections_xplore.json"   --output-dir "output/reportage"
+```
+
+Format:
+
+```json
+{
+  "replacements": {
+    "mot mal reconnu": "mot corrigé"
+  },
+  "proper_nouns": {
+    "forme reconnue": "Nom officiel"
+  }
+}
+```
+
+## YouTube end card
+
+A 1.5-second end card is enabled by default with:
+
+```text
+Voir sur YouTube
+```
+
+Disable or customise it with:
+
+```bash
+--end-card-seconds 0
+--youtube-cta "Voir sur YouTube"
+```
+
+## Better editorial selection
+
+The quality profile now:
+
+- requests five candidates per transcript block;
+- rejects generic fragments without a clear payoff;
+- performs an additional full-transcript montage pass;
+- uses Ollama for final ranking by default;
+- invalidates old candidate/ranking caches through new cache filenames.
+
+`qwen3:4b` remains usable. For stronger editorial judgement on a 12 GB GPU, test:
+
+```bash
+ollama pull qwen3:8b
+```
+
+then select `qwen3:8b` in the GUI or pass `--model qwen3:8b`.
+
+After upgrading from 0.6.x, rerun analysis and subtitle correction once:
+
+```bash
+--force-ollama --force-subtitle-correction
+```

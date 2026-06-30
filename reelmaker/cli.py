@@ -6,6 +6,7 @@ from typing import Any
 
 from .analyzer import (
     generate_candidates,
+    generate_global_composite_candidates,
     interactive_select,
     make_default_selections,
     rank_candidates,
@@ -75,9 +76,10 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
 
     parser.add_argument("--target-count", type=int, default=10, help="Final reels count.")
     parser.add_argument("--shortlist-count", type=int, default=20, help="Shortlist count for validation.")
-    parser.add_argument("--candidates-per-chunk", type=int, default=3, help="Max candidates proposed per transcript chunk.")
+    parser.add_argument("--candidates-per-chunk", type=int, default=5, help="Max candidates proposed per transcript chunk.")
     parser.add_argument("--chunk-seconds", type=int, default=300, help="Transcript chunk size in seconds. Smaller chunks are safer for local models; larger chunks mean fewer Ollama calls.")
     parser.add_argument("--chunk-overlap-seconds", type=int, default=20, help="Transcript overlap between chunks.")
+    parser.add_argument("--global-composite-count", type=int, default=3, help="Additional cross-video montage candidates when composition-mode=hybrid. 0 disables it.")
     parser.add_argument(
         "--composition-mode",
         choices=["contiguous", "hybrid"],
@@ -89,6 +91,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-duration", type=int, default=60, help="Maximum reel duration in seconds.")
     parser.add_argument("--pre-padding", type=float, default=0.25, help="Seconds added before the first subtitle cue when refining boundaries.")
     parser.add_argument("--post-padding", type=float, default=1.2, help="Seconds added after the selected speech boundary.")
+    parser.add_argument("--max-end-extension", type=float, default=2.0, help="Extra seconds allowed beyond max-duration to finish a sentence naturally.")
     parser.add_argument(
         "--boundary-mode",
         choices=["auto", "words", "cues", "off"],
@@ -96,7 +99,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         help="Cut refinement source. auto uses WhisperX word pauses when available, otherwise subtitle cues.",
     )
     parser.add_argument("--yes", action="store_true", help="Non-interactive: accept top ranked reels.")
-    parser.add_argument("--ranking-mode", choices=["local", "ollama"], default="local", help="Ranking strategy. Local is much faster and avoids malformed LLM JSON.")
+    parser.add_argument("--ranking-mode", choices=["local", "ollama"], default="ollama", help="Ranking strategy. Local is much faster and avoids malformed LLM JSON.")
     parser.add_argument("--no-resume", action="store_true", help="Disable resume/cache of previous Ollama chunk results.")
     parser.add_argument("--force-ollama", action="store_true", help="Ignore cached Ollama chunk/ranking results and recompute.")
 
@@ -111,7 +114,9 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--subtitle-font-size", type=int, default=60, help="Burned subtitle font size for 1080x1920 ASS subtitles.")
     parser.add_argument("--subtitle-margin-v", type=int, default=150, help="Vertical bottom margin for subtitles. Larger = higher above bottom.")
     parser.add_argument("--subtitle-wrap-width", type=int, default=23, help="Approximate subtitle characters per line before ASS wrapping.")
-    parser.add_argument("--subtitle-max-lines", type=int, default=2, help="Maximum burned subtitle lines. Keeps reels readable on phones.")
+    parser.add_argument("--subtitle-max-lines", type=int, default=2, help="Preferred subtitle line count. Text is split or reduced, never truncated.")
+    parser.add_argument("--subtitle-position", choices=["auto", "bottom", "top"], default="auto", help="auto moves generated subtitles away from text already present in the video.")
+    parser.add_argument("--correction-dictionary", type=Path, help="Optional JSON dictionary merged with the built-in French/Nord-vaudois corrections.")
     parser.add_argument("--subtitle-correction", choices=["off", "basic", "ollama"], default="ollama", help="Subtitle cleanup mode. 'ollama' corrects selected reel captions with context and caches results.")
     parser.add_argument("--force-subtitle-correction", action="store_true", help="Ignore cached corrected subtitles and recompute them.")
     parser.add_argument("--crop-mode", choices=["center", "face", "motion", "smart", "scene-smart"], default="smart", help="Vertical crop mode. scene-smart recalculates smart framing for each detected shot.")
@@ -120,11 +125,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--scene-min-frames", type=int, default=15, help="Minimum scene length in frames for PySceneDetect.")
     parser.add_argument("--force-scene-detection", action="store_true", help="Ignore scenes.json and detect shots again.")
     parser.add_argument("--fps", type=int, default=25, help="Output frame rate.")
-    parser.add_argument("--end-card-seconds", type=float, default=0.0, help="Append a final YouTube call-to-action card. 0 disables it.")
+    parser.add_argument("--end-card-seconds", type=float, default=1.5, help="Append a final YouTube call-to-action card. 0 disables it.")
     parser.add_argument("--end-card-style", choices=["short", "title", "full", "none"], default="short", help="Final card layout. short is recommended for Reels/TikTok.")
-    parser.add_argument("--end-card-comment-text", default="Voir commentaire", help="Small text shown on the final card.")
+    parser.add_argument("--end-card-comment-text", default="", help="Small text shown on the final card.")
     parser.add_argument("--episode-title", default="", help="Episode title shown on the final YouTube card and captions.")
-    parser.add_argument("--youtube-cta", default="Suite sur YouTube", help="Text shown on the final YouTube card.")
+    parser.add_argument("--youtube-cta", default="Voir sur YouTube", help="Text shown on the final YouTube card.")
     parser.add_argument("--crf", type=int, default=20, help="FFmpeg x264 CRF, lower means better quality/larger file.")
     parser.add_argument("--preset", default="medium", help="FFmpeg x264 preset.")
     parser.add_argument("--progress-json", action="store_true", help=argparse.SUPPRESS)
@@ -312,9 +317,9 @@ def run_analyze(args: argparse.Namespace, reporter: ProgressReporter | None = No
         reporter.start_stage(
             "analysis",
             "Analyse editoriale Ollama",
-            total=max(1, len(chunks)),
+            total=max(1, len(chunks) + (1 if args.composition_mode == "hybrid" and args.global_composite_count > 0 else 0)),
             history_key=f"analysis:{args.model}:{args.composition_mode}",
-            history_units=max(1, len(chunks)),
+            history_units=max(1, len(chunks) + (1 if args.composition_mode == "hybrid" and args.global_composite_count > 0 else 0)),
         )
     candidates = generate_candidates(
         chunks,
@@ -328,6 +333,22 @@ def run_analyze(args: argparse.Namespace, reporter: ProgressReporter | None = No
         composition_mode=args.composition_mode,
         progress_callback=(lambda current, total, message: reporter.update(current, message=message)) if reporter else None,
     )
+    if args.composition_mode == "hybrid" and args.global_composite_count > 0:
+        global_candidates = generate_global_composite_candidates(
+            cues,
+            client,
+            paths.logs_dir,
+            max_candidates=args.global_composite_count,
+            min_duration=args.min_duration,
+            max_duration=args.max_duration,
+            resume=not args.no_resume,
+            force_ollama=args.force_ollama,
+        )
+        candidates.extend(global_candidates)
+        for index, candidate in enumerate(candidates, start=1):
+            candidate.id = f"C{index:03d}"
+        if reporter:
+            reporter.update(len(chunks) + 1, message="Montages globaux")
     if reporter:
         reporter.finish_stage(record_history=True)
     candidates = refine_candidate_boundaries(
@@ -338,6 +359,7 @@ def run_analyze(args: argparse.Namespace, reporter: ProgressReporter | None = No
         min_duration=args.min_duration,
         target_duration=args.target_duration,
         max_duration=args.max_duration,
+        max_end_extension=args.max_end_extension,
         pre_padding=args.pre_padding,
         post_padding=args.post_padding,
     )
@@ -417,6 +439,8 @@ def run_render(
     source_video = resolve_source_video(args, paths)
     transcript = load_transcript(args, paths, reporter)
     scenes = load_scenes_for_render(args, paths, source_video, reporter)
+    if args.correction_dictionary and not args.correction_dictionary.is_file():
+        fail(f"Correction dictionary not found: {args.correction_dictionary}")
 
     if selections is None:
         selected_path = args.selected_reels or (paths.output_dir / "selected_reels.json")
@@ -446,7 +470,9 @@ def run_render(
         subtitle_margin_v=args.subtitle_margin_v,
         subtitle_wrap_width=args.subtitle_wrap_width,
         subtitle_max_lines=args.subtitle_max_lines,
+        subtitle_position=args.subtitle_position,
         subtitle_correction=args.subtitle_correction,
+        correction_dictionary=args.correction_dictionary,
         subtitle_correction_client=make_client(args) if args.subtitle_correction == "ollama" else None,
         force_subtitle_correction=args.force_subtitle_correction,
         crop_mode=args.crop_mode,

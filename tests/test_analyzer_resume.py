@@ -12,7 +12,7 @@ class FailingClient:
 def test_generate_candidates_reuses_existing_raw_log(tmp_path: Path):
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
-    (logs_dir / "ollama_chunk_001.txt").write_text(
+    (logs_dir / "ollama_chunk_001.impact_v2.txt").write_text(
         '{"candidates":[{"start_time":"00:00:10,000","end_time":"00:00:40,000",'
         '"title":"Titre","hook":"Hook","reason":"Raison","score":8,'
         '"transcript_excerpt":"Texte"}]}',
@@ -34,7 +34,7 @@ def test_generate_candidates_reuses_existing_raw_log(tmp_path: Path):
     assert candidates[0].id == "C001"
     assert candidates[0].start == 10
     assert candidates[0].end == 40
-    assert (logs_dir / "ollama_chunk_001.candidates.json").exists()
+    assert (logs_dir / "ollama_chunk_001.impact_v2.candidates.json").exists()
 
 
 def test_local_rank_penalizes_warnings():
@@ -70,7 +70,7 @@ def test_generate_candidates_renumbers_mixed_cached_chunks(tmp_path: Path):
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     for chunk_index, start in [(1, 10), (2, 70)]:
-        (logs_dir / f"ollama_chunk_{chunk_index:03d}.candidates.json").write_text(
+        (logs_dir / f"ollama_chunk_{chunk_index:03d}.impact_v2.candidates.json").write_text(
             '[{"id":"C001","start":%s,"end":%s,"title":"Titre","hook":"Hook",'
             '"reason":"Raison","score":8,"transcript_excerpt":"Texte","warnings":[]}]'
             % (start, start + 30),
