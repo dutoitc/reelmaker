@@ -24,6 +24,7 @@ Do not ask again for information already present in the project files or convers
 - Preserve current CLI behaviour unless the validated objective changes it.
 - Add or update tests with every behaviour change.
 - Run `bash scripts/check_project.sh` before delivering an iteration.
+- Run `bash createTarGz.sh` when preparing the complete project archive for the next conversation.
 - Update `PROJECT_MANIFEST.md`, `ROADMAP.md`, and `CHANGELOG.md` when state or decisions change.
 - Give the complete modified module when presenting code, or clearly label any excerpt/partial file.
 

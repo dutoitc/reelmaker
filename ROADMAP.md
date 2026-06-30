@@ -1,12 +1,12 @@
 # Reelmaker roadmap
 
-## Release 0.2.2 — publishable MVP
+## Release 0.2.3 — publishable MVP
 
 Status: ready after local checks.
 
 - Clean source archive and Git ignore rules.
 - CI tests on Python 3.10, 3.12, and 3.13.
-- Reproducible project-check and ChatGPT-package scripts.
+- Reproducible project checks and a root `createTarGz.sh` archive script.
 - Coding-assistant workflow and architecture guardrails.
 
 Known debt accepted for this MVP:

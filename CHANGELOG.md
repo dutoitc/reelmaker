@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3 — 2026-06-30
+
+- Added root `createTarGz.sh` for a complete, clean ChatGPT upload archive.
+- Excluded generated output, caches, build artifacts, secrets, and local media from that archive.
+- Removed personal names from documentation, license attribution, and package metadata.
+
 ## 0.2.2 — 2026-06-30
 
 - Removed generated Python bytecode from the distributable project.

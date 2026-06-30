@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-- Version: **0.2.2**
+- Version: **0.2.3**
 - Status: local CLI MVP, suitable for a public GitHub repository as an experimental project.
 - Primary platform: Windows 11 + Git Bash.
 - Processing policy: local/offline by default.
@@ -65,7 +65,7 @@ YouTube/SRT transcript
 
 Verified:
 
-- all 12 automated tests pass on Python 3.13;
+- all automated tests pass on Python 3.13;
 - project compiles successfully;
 - no API key, password, token, or private key was found;
 - subprocess calls use argument lists, not shell interpolation;
@@ -113,7 +113,7 @@ python -m venv .venv
 source .venv/Scripts/activate
 pip install -e ".[dev,vision]"
 bash scripts/check_project.sh
-bash scripts/package_project.sh
+bash createTarGz.sh
 ```
 
-The package script creates a clean source archive in `dist/`, suitable for GitHub release testing or upload to ChatGPT.
+The root script creates `reelmaker.tgz` without generated output, caches, build artifacts, secrets, or local media, ready to upload to ChatGPT.

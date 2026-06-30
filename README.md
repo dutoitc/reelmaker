@@ -7,7 +7,7 @@ Generate vertical reels from a long video using:
 - **Ollama** for local AI candidate selection;
 - **FFmpeg** for vertical cuts, ASS burned subtitles, and optional YouTube end cards.
 
-Version **0.2.2** keeps the output-quality work from 0.2.1 and adds the cleanup, tests, documentation, and packaging needed for a public experimental repository.
+Version **0.2.3** keeps the output-quality work from 0.2.1 and adds the cleanup, tests, documentation, and packaging needed for a public experimental repository.
 
 ## Current workflow
 
@@ -99,11 +99,11 @@ python -m reelmaker all \
   --output-dir "output/my-video"
 ```
 
-## What changed in 0.2.2
+## What changed in 0.2.3
 
 | Area | Change |
 |---|---|
-| Repository | Added clean Git rules, CI tests, project checks, ChatGPT packaging, roadmap, and architecture guardrails. |
+| Repository | Added clean Git rules, CI tests, project checks, `createTarGz.sh`, roadmap, architecture guardrails, and neutral public metadata. |
 | End card | Shorter default card: `Suite sur YouTube` + `Voir commentaire`. Use `--end-card-style title` if you also want the episode title. |
 | Subtitles | Defaults are lower and more compact: font 60, margin 150, max 2 lines, narrower wrapping. |
 | Subtitle correction | New `--subtitle-correction basic|ollama|off`. `basic` is conservative and fast. `ollama` corrects only selected reel subtitles and caches the result. |
@@ -251,10 +251,10 @@ GitHub Actions runs the base unit tests on Python 3.10, 3.12, and 3.13. FFmpeg, 
 ## Create a clean archive for ChatGPT
 
 ```bash
-bash scripts/package_project.sh
+bash createTarGz.sh
 ```
 
-The generated archive excludes virtual environments, output videos, caches, bytecode, and local media. On the next conversation, upload it and say **“on fait la suite”**. The assistant should follow `AGENTS.md`, ask the strategic questions needed for one iteration, and validate the objective before changing code.
+The script creates `reelmaker.tgz` in the project root and excludes virtual environments, generated output, caches, build artifacts, secrets, and local media. On the next conversation, upload it and say **“on fait la suite”**. The assistant should follow `AGENTS.md`, ask the strategic questions needed for one iteration, and validate the objective before changing code.
 
 ## Next milestone
 
