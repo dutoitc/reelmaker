@@ -5,7 +5,7 @@ from reelmaker.models import ReelCandidate, TranscriptChunk
 
 
 class FailingClient:
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, json_schema=None) -> str:
         raise AssertionError("Ollama should not be called when raw log cache is reusable")
 
 

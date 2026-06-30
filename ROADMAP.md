@@ -48,6 +48,16 @@ Useful tuning:
 
 Lower threshold = more detected cuts. Increase it when pans or flashes create false cuts.
 
+## Release 0.5.1 — reliable Ollama JSON
+
+Status: implemented after the first real WhisperX/Xplore run.
+
+- explicit `think=false` for Qwen 3 API requests;
+- JSON Schema structured output for candidates, ranking and subtitle correction;
+- structured calls use non-streaming mode and temperature 0;
+- clear diagnostics for empty, truncated and rejected responses;
+- existing transcript cache remains reusable after a failed candidate run.
+
 ## Iteration 4 — relevant beautiful views / B-roll
 
 Refactoring checkpoint: keep frame extraction and scoring outside `renderer.py`.

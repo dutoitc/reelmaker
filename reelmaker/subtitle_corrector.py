@@ -11,6 +11,32 @@ _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?])")
 _MULTI_PUNCT_RE = re.compile(r"([!?.,;:]){3,}")
 _WS_RE = re.compile(r"\s+")
 
+
+
+def subtitle_response_schema(*, max_items: int) -> dict:
+    return {
+        "type": "object",
+        "properties": {
+            "subtitles": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": max(1, max_items),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer", "minimum": 1},
+                        "text": {"type": "string"},
+                    },
+                    "required": ["index", "text"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["subtitles"],
+        "additionalProperties": False,
+    }
+
+
 _COMMON_FIXES = {
     "ecolosons": "eclosions",
     "eclosons": "eclosions",
@@ -117,7 +143,10 @@ def correct_cues_with_ollama(
             pass
 
     prompt = _build_ollama_prompt(selection=selection, cues=cues, episode_title=episode_title)
-    raw_text = client.generate(prompt)
+    raw_text = client.generate(
+        prompt,
+        json_schema=subtitle_response_schema(max_items=len(cues)),
+    )
     raw_path = cache_path.with_suffix(".raw.txt")
     raw_path.write_text(raw_text, encoding="utf-8")
     payload = parse_json_loose(raw_text)

@@ -8,7 +8,7 @@ Generate several vertical reels from a long video with local tools:
 - **OpenCV** for local face/motion crop hints;
 - **PySceneDetect** for optional shot detection and per-shot framing.
 
-Version **0.5.0** adds scene-aware vertical framing while preserving the existing static crop modes and pause-aware spoken boundaries.
+Version **0.5.1** stabilizes Ollama JSON generation and keeps the scene-aware framing introduced in 0.5.0.
 
 ## Recommended environment
 
@@ -49,7 +49,7 @@ Install Ollama from the [official Windows page](https://ollama.com/download/wind
 ```bash
 ollama --version
 ollama pull qwen3:4b
-ollama run qwen3:4b "Réponds uniquement: OK"
+ollama run qwen3:4b --think=false "Réponds uniquement: OK"
 ```
 
 ### 4. Install CUDA for WhisperX GPU mode
@@ -330,8 +330,14 @@ Open the Ollama Windows application, then verify:
 
 ```bash
 ollama list
-ollama run qwen3:4b "OK"
+ollama run qwen3:4b --think=false "Réponds uniquement: OK"
 ```
+
+### `No valid JSON found in model response`
+
+Version 0.5.1 uses Ollama structured outputs with a JSON Schema and disables Qwen 3 thinking through the API. Update Ollama when an HTTP 400 reports that `format` or `think` is unsupported.
+
+An interrupted 0.5.0 run can be restarted directly: `transcript.json` is reused and the invalid Ollama chunks are regenerated. Add `--force-ollama` once only when you explicitly want to ignore all candidate caches.
 
 ## Cache
 

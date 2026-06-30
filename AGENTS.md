@@ -48,7 +48,7 @@ Explain the concrete stability benefit and obtain objective validation before a 
 
 ## Current strategic direction
 
-Version 0.5.0 adds scene-aware framing through separate scene-analysis and framing modules. The next step is real-video validation before aesthetic scoring or B-roll.
+Version 0.5.1 stabilizes Qwen 3 through Ollama structured outputs and explicit `think=false`. Scene-aware framing still requires real-video validation before aesthetic scoring or B-roll.
 
 Preferred sequence:
 

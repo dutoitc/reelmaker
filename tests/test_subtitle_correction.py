@@ -19,7 +19,7 @@ def test_ollama_partial_response_keeps_basic_correction_for_missing_items(tmp_pa
     from reelmaker.subtitle_corrector import correct_cues_with_ollama
 
     class PartialClient:
-        def generate(self, prompt: str) -> str:
+        def generate(self, prompt: str, *, json_schema=None) -> str:
             return '{"subtitles":[{"index":1,"text":"premier corrige"}]}'
 
     cues = [

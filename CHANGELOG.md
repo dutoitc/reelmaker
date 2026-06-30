@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 — 2026-06-30
+
+- Fixed Qwen 3 candidate generation returning prose, thinking-only output, or truncated non-JSON responses.
+- Disabled Ollama thinking explicitly through the API instead of relying only on `/no_think`.
+- Added Ollama JSON Schema structured outputs for candidate generation, ranking, and subtitle correction.
+- Forced structured requests to non-streaming mode and temperature 0 for deterministic parsing.
+- Added explicit diagnostics for empty output, token-limit truncation, HTTP errors, and streaming errors.
+- Expanded the suite to 36 passing tests.
+
 ## 0.5.0 — 2026-06-30
 
 - Added lazy PySceneDetect 0.7 integration and fingerprinted `scenes.json`.

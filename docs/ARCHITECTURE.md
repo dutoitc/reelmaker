@@ -23,13 +23,19 @@ MP4 / SRT / YouTube
 - `transcript_io.py`: transcript JSON/SRT persistence and fingerprints.
 - `subtitles.py`: parsing, chunking and reel subtitle normalization.
 - `youtube.py`: yt-dlp adapter.
-- `ollama_client.py`: Ollama HTTP adapter and JSON extraction.
+- `ollama_client.py`: Ollama HTTP adapter, explicit thinking control, structured-output contracts, and JSON extraction.
 - `analyzer.py`: candidate generation, ranking and human selection.
 - `boundary.py`: pause/cue boundary scoring and cut snapping.
 - `scene_analysis.py`: PySceneDetect adapter, scene schema and cache.
 - `vision.py`: lightweight face/motion crop hints.
 - `framing.py`: static or per-shot crop plan; no FFmpeg execution.
 - `renderer.py`: executes framing plans, subtitles, end cards and FFmpeg rendering.
+
+## Ollama boundary
+
+All model-assisted stages request JSON Schema structured outputs. The adapter sets `think=false`, temperature 0 and non-streaming mode for these requests. Prompts still describe the expected JSON for model grounding, while Python validates and converts the returned values.
+
+The rest of the application does not depend on Ollama-specific response envelopes. Raw model output is kept in `output/.../logs/` for diagnosis and invalid legacy output is regenerated on resume.
 
 ## Scene boundary
 

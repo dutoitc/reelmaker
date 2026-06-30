@@ -11,6 +11,71 @@ from .timecode import format_hms, parse_timecode
 from .utils import read_json, write_json
 
 
+
+
+def candidate_response_schema(*, max_candidates: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "candidates": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": max(1, max_candidates),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "start_time": {"type": "string"},
+                        "end_time": {"type": "string"},
+                        "title": {"type": "string"},
+                        "hook": {"type": "string"},
+                        "reason": {"type": "string"},
+                        "score": {"type": "number", "minimum": 0, "maximum": 10},
+                        "transcript_excerpt": {"type": "string"},
+                    },
+                    "required": [
+                        "start_time",
+                        "end_time",
+                        "title",
+                        "hook",
+                        "reason",
+                        "score",
+                        "transcript_excerpt",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["candidates"],
+        "additionalProperties": False,
+    }
+
+
+def ranking_response_schema(*, max_selected: int) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "selected": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": max(1, max_selected),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "candidate_id": {"type": "string"},
+                        "rank": {"type": "integer", "minimum": 1},
+                        "improved_hook": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["candidate_id", "rank", "improved_hook", "reason"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["selected"],
+        "additionalProperties": False,
+    }
+
+
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         if isinstance(value, str) and ":" in value:
@@ -237,7 +302,10 @@ def generate_candidates(
             max_duration=max_duration,
         )
         try:
-            raw = client.generate(prompt)
+            raw = client.generate(
+                prompt,
+                json_schema=candidate_response_schema(max_candidates=candidates_per_chunk),
+            )
         except RuntimeError as exc:
             (logs_dir / f"ollama_chunk_{chunk.index:03d}.error.txt").write_text(str(exc), encoding="utf-8")
             print(f"  skipped: {exc}")
@@ -375,7 +443,10 @@ def rank_candidates(
     print(f"Ollama ranking: {len(preselected)} candidates")
     prompt = build_ranking_prompt(preselected, shortlist_count=shortlist_count, target_count=target_count)
     try:
-        raw = client.generate(prompt)
+        raw = client.generate(
+            prompt,
+            json_schema=ranking_response_schema(max_selected=shortlist_count),
+        )
     except RuntimeError as exc:
         (logs_dir / "ollama_ranking.error.txt").write_text(str(exc), encoding="utf-8")
         print(f"  ranking skipped: {exc}")

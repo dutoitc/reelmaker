@@ -2,8 +2,8 @@
 
 ## Snapshot
 
-- Version: **0.5.0**
-- Status: local CLI MVP with MP4 transcription, pause-aware spoken cuts, and optional scene-aware framing.
+- Version: **0.5.1**
+- Status: local CLI MVP with MP4 transcription, reliable structured Ollama analysis, pause-aware cuts, and optional scene-aware framing.
 - Primary platform: Windows 11 + Git Bash.
 - Reference runtime: Python 3.11 + NVIDIA RTX 4070 12 GB.
 - Processing policy: local/offline by default.
@@ -44,13 +44,22 @@ MP4/SRT/YouTube
 - transcription: `auto`;
 - WhisperX: `large-v3`, French, batch size 4;
 - spoken boundaries: `auto`;
-- Ollama: `qwen3:4b`;
+- Ollama: `qwen3:4b`, `think=false`, JSON Schema structured outputs;
 - ranking: local;
 - crop: static `smart` for backward compatibility;
 - optional improved crop: `scene-smart`;
 - scene detector: PySceneDetect ContentDetector, threshold 27, minimum 15 frames;
 - output: 1080x1920, H.264/AAC;
 - subtitle correction: `basic`.
+
+## Version 0.5.1 delivered
+
+- explicit Ollama `think=false` for Qwen 3;
+- JSON Schema output contracts for candidate generation, ranking and subtitle correction;
+- structured requests forced to non-streaming mode with temperature 0;
+- explicit diagnostics for empty output, output-token truncation, HTTP rejection and streamed errors;
+- failed 0.5.0 candidate runs can resume from the existing WhisperX transcript cache;
+- 36 passing unit tests.
 
 ## Version 0.5.0 delivered
 
@@ -70,7 +79,7 @@ MP4/SRT/YouTube
 Verified in the project environment:
 
 - compilation succeeds;
-- 34 unit tests pass;
+- 36 unit tests pass;
 - PySceneDetect 0.7 detects synthetic cuts correctly;
 - scene cache reuse/invalidation works;
 - scene-aware rendering produces a valid vertical MP4 with audio;
@@ -95,7 +104,7 @@ Still requires Windows/Xplore validation:
 
 ## Next strategic direction
 
-Validate version 0.5.0 on a representative video before adding visual ranking.
+Validate version 0.5.1 on the current Luzerne video before adding visual ranking.
 
 Possible next iteration after feedback:
 
