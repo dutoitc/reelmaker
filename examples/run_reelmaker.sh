@@ -37,7 +37,8 @@ python -m reelmaker all \
   --subtitle-wrap-width 23 \
   --subtitle-max-lines 2 \
   --subtitle-correction basic \
-  --crop-mode smart \
+  --crop-mode scene-smart \
+  --scene-detection auto \
   --end-card-seconds 3.0 \
   --end-card-style short \
   --youtube-cta "Suite sur YouTube" \

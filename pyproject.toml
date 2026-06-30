@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reelmaker"
-version = "0.4.0"
+version = "0.5.0"
 description = "Generate vertical reels from a local video using local transcription and Ollama."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Reelmaker contributors" }]
 dependencies = [
   "yt-dlp>=2025.1.0"
@@ -22,7 +23,7 @@ where = ["."]
 include = ["reelmaker*"]
 
 [project.optional-dependencies]
-vision = ["opencv-python>=4.9.0", "numpy>=1.26"]
+vision = ["opencv-python>=4.9.0", "numpy>=1.26", "scenedetect>=0.7,<0.8"]
 transcription = ["whisperx>=3.8.6,<3.9"]
 dev = ["pytest>=8,<9"]
 

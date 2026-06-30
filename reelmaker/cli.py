@@ -16,6 +16,7 @@ from .console import configure_console
 from .models import ProjectPaths, ReelSelection, TranscriptDocument
 from .ollama_client import OllamaClient
 from .renderer import render_reels
+from .scene_analysis import Scene, load_or_detect_scenes
 from .subtitles import chunk_transcript
 from .timecode import parse_timecode
 from .transcription import (
@@ -37,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ["all", "analyze", "render", "transcribe", "subtitles"]:
+    for name in ["all", "analyze", "render", "transcribe", "subtitles", "scenes"]:
         add_common_args(sub.add_parser(name))
     return parser
 
@@ -101,7 +102,11 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--subtitle-max-lines", type=int, default=2, help="Maximum burned subtitle lines. Keeps reels readable on phones.")
     parser.add_argument("--subtitle-correction", choices=["off", "basic", "ollama"], default="basic", help="Subtitle cleanup mode. 'ollama' corrects selected reel captions with context and caches results.")
     parser.add_argument("--force-subtitle-correction", action="store_true", help="Ignore cached corrected subtitles and recompute them.")
-    parser.add_argument("--crop-mode", choices=["center", "face", "motion", "smart"], default="smart", help="Vertical crop mode. smart=faces first, then motion, then center.")
+    parser.add_argument("--crop-mode", choices=["center", "face", "motion", "smart", "scene-smart"], default="smart", help="Vertical crop mode. scene-smart recalculates smart framing for each detected shot.")
+    parser.add_argument("--scene-detection", choices=["auto", "off"], default="auto", help="Scene detection used by scene-smart. auto uses local PySceneDetect; off falls back to one static smart crop.")
+    parser.add_argument("--scene-threshold", type=float, default=27.0, help="PySceneDetect content threshold. Lower values detect more cuts.")
+    parser.add_argument("--scene-min-frames", type=int, default=15, help="Minimum scene length in frames for PySceneDetect.")
+    parser.add_argument("--force-scene-detection", action="store_true", help="Ignore scenes.json and detect shots again.")
     parser.add_argument("--fps", type=int, default=25, help="Output frame rate.")
     parser.add_argument("--end-card-seconds", type=float, default=0.0, help="Append a final YouTube call-to-action card. 0 disables it.")
     parser.add_argument("--end-card-style", choices=["short", "title", "full", "none"], default="short", help="Final card layout. short is recommended for Reels/TikTok.")
@@ -185,6 +190,41 @@ def make_client(args: argparse.Namespace) -> OllamaClient:
         num_predict=args.ollama_num_predict,
         stream=not args.no_ollama_stream,
     )
+
+
+def load_scenes_for_render(args: argparse.Namespace, paths: ProjectPaths, source_video: Path) -> list[Scene] | None:
+    if args.crop_mode != "scene-smart" or args.scene_detection == "off":
+        return None
+    try:
+        document, reused = load_or_detect_scenes(
+            source_video,
+            paths.output_dir,
+            threshold=args.scene_threshold,
+            min_scene_len=args.scene_min_frames,
+            force=args.force_scene_detection,
+        )
+    except RuntimeError as exc:
+        fail(str(exc))
+    cache_text = "reused cache" if reused else "generated"
+    print(f"Scenes {cache_text}: {len(document.scenes)} shots -> {paths.output_dir / 'scenes.json'}")
+    return document.scenes
+
+
+def run_scenes(args: argparse.Namespace) -> None:
+    paths = ProjectPaths.create(args.output_dir)
+    source_video = resolve_source_video(args, paths)
+    try:
+        document, reused = load_or_detect_scenes(
+            source_video,
+            paths.output_dir,
+            threshold=args.scene_threshold,
+            min_scene_len=args.scene_min_frames,
+            force=args.force_scene_detection,
+        )
+    except RuntimeError as exc:
+        fail(str(exc))
+    cache_text = "reused cache" if reused else "generated"
+    print(f"Scenes {cache_text}: {len(document.scenes)} shots -> {paths.output_dir / 'scenes.json'}")
 
 
 def run_transcribe(args: argparse.Namespace) -> None:
@@ -301,6 +341,7 @@ def run_render(args: argparse.Namespace, selections: list[ReelSelection] | None 
     paths = ProjectPaths.create(args.output_dir)
     source_video = resolve_source_video(args, paths)
     transcript = load_transcript(args, paths)
+    scenes = load_scenes_for_render(args, paths, source_video)
 
     if selections is None:
         selected_path = args.selected_reels or (paths.output_dir / "selected_reels.json")
@@ -325,6 +366,7 @@ def run_render(args: argparse.Namespace, selections: list[ReelSelection] | None 
         subtitle_correction_client=make_client(args) if args.subtitle_correction == "ollama" else None,
         force_subtitle_correction=args.force_subtitle_correction,
         crop_mode=args.crop_mode,
+        scenes=scenes,
         fps=args.fps,
         end_card_seconds=args.end_card_seconds,
         end_card_style=args.end_card_style,
@@ -352,6 +394,8 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command in {"transcribe", "subtitles"}:
         run_transcribe(args)
+    elif args.command == "scenes":
+        run_scenes(args)
     elif args.command == "analyze":
         run_analyze(args)
     elif args.command == "render":

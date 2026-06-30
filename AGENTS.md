@@ -48,12 +48,12 @@ Explain the concrete stability benefit and obtain objective validation before a 
 
 ## Current strategic direction
 
-Version 0.4.0 has pause-aware spoken boundaries. The next step is real-video stabilization before adding another subsystem.
+Version 0.5.0 adds scene-aware framing through separate scene-analysis and framing modules. The next step is real-video validation before aesthetic scoring or B-roll.
 
 Preferred sequence:
 
-- request one representative MP4 or its generated `transcript.json` when useful;
-- compare `--boundary-mode off` and `auto` on at least 10 cuts;
-- tune pause thresholds only from observed failures;
-- do not add pitch/prosody unless pause + punctuation remains insufficient;
-- before scene-aware work, validate a small architecture extraction around `renderer.py`.
+- compare `--crop-mode smart` and `scene-smart` on representative Xplore footage;
+- inspect false/missed cuts and crop stability;
+- tune thresholds only from observed failures;
+- consider a stronger face/person detector if framing remains weak;
+- keep aesthetic scoring and B-roll outside `renderer.py`.

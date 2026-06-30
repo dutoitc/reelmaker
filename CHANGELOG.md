@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 — 2026-06-30
+
+- Added lazy PySceneDetect 0.7 integration and fingerprinted `scenes.json`.
+- Added the `scenes` command plus scene threshold/minimum-length controls.
+- Extracted framing decisions into dedicated `framing.py`.
+- Added `--crop-mode scene-smart` for one smart crop per detected shot.
+- Merged similar adjacent crop decisions to limit needless segment rendering.
+- Added scene-aware FFmpeg rendering with a final subtitle pass.
+- Persisted the full framing plan in each reel metadata file.
+- Added synthetic integration validation for cuts, distinct crops, audio, and burned subtitles.
+- Expanded the suite to 34 passing tests.
+
 ## 0.4.0 — 2026-06-30
 
 - Extracted cut refinement from `analyzer.py` into dedicated `boundary.py`.

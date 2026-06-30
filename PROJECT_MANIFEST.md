@@ -2,8 +2,8 @@
 
 ## Snapshot
 
-- Version: **0.4.0**
-- Status: local CLI MVP with direct MP4 transcription and pause-aware spoken boundaries.
+- Version: **0.5.0**
+- Status: local CLI MVP with MP4 transcription, pause-aware spoken cuts, and optional scene-aware framing.
 - Primary platform: Windows 11 + Git Bash.
 - Reference runtime: Python 3.11 + NVIDIA RTX 4070 12 GB.
 - Processing policy: local/offline by default.
@@ -13,101 +13,96 @@
 
 Generate several usable 9:16 reels from a long-form CAPStv/Xplore Swiss TV video, with human validation before rendering.
 
-## Current inputs
-
-- local MP4 with optional WhisperX transcription;
-- local SRT/VTT;
-- YouTube subtitles;
-- Ollama for candidate selection.
-
 ## Current pipeline
 
 ```text
 MP4/SRT/YouTube
   -> TranscriptionProvider
-  -> versioned TranscriptDocument with optional word timings
-  -> overlapping transcript chunks
+  -> TranscriptDocument schema v1
   -> Ollama candidate proposals
-  -> boundary.py: word-pause or cue-based cut refinement
+  -> pause/cue boundary refinement
   -> local or Ollama ranking
   -> human validation
-  -> static smart crop + subtitle correction
-  -> FFmpeg render
+  -> optional PySceneDetect shot analysis
+  -> framing plan: one crop or one crop per shot
+  -> subtitle correction + FFmpeg render
 ```
 
 ## Stable decisions
 
-- Keep Windows + Git Bash as the primary runtime.
-- Keep all processing local by default.
-- Preserve SRT/YouTube compatibility.
-- Keep WhisperX optional and lazily imported.
-- Keep JSON boundaries between expensive stages.
-- Keep human validation before expensive rendering.
-- Add one coherent feature slice per iteration.
-- Keep prosody/pitch outside the baseline until pause-aware cuts are measured.
+- Windows + Git Bash remains the primary runtime.
+- Processing stays local by default.
+- SRT/YouTube compatibility is preserved.
+- WhisperX and PySceneDetect remain optional and lazily imported.
+- Expensive stages use fingerprinted JSON caches.
+- Human validation happens before rendering.
+- One coherent feature slice per iteration.
+- Refactor before adding another responsibility to `analyzer.py` or `renderer.py`.
 
 ## Current defaults
 
-- transcription mode: `auto`;
-- WhisperX model: `large-v3`, language `fr`, batch size 4;
-- boundary mode: `auto`, preferring word timestamps and falling back to cues;
-- Ollama model: `qwen3:4b`;
+- transcription: `auto`;
+- WhisperX: `large-v3`, French, batch size 4;
+- spoken boundaries: `auto`;
+- Ollama: `qwen3:4b`;
 - ranking: local;
-- candidate chunks: 300 seconds with 20 seconds overlap;
-- target reel duration: about 22 seconds;
+- crop: static `smart` for backward compatibility;
+- optional improved crop: `scene-smart`;
+- scene detector: PySceneDetect ContentDetector, threshold 27, minimum 15 frames;
 - output: 1080x1920, H.264/AAC;
-- crop: static `smart` mode;
 - subtitle correction: `basic`.
 
-## Version 0.4.0 delivered
+## Version 0.5.0 delivered
 
-- dedicated `boundary.py` module, removing boundary responsibility from `analyzer.py`;
-- natural start/end scoring from word pauses, sentence punctuation, cue boundaries and speaker changes;
-- automatic SRT/VTT cue fallback;
-- safe padding clamped to available silence so it does not include the next spoken word;
-- boundary method, score and reasons in candidate JSON;
-- `--boundary-mode auto|words|cues|off` for comparison;
-- small boundary-quality signal in local ranking;
-- complete Windows/Git Bash initialization instructions in README;
-- 26 passing unit tests.
+- dedicated `scene_analysis.py` adapter with lazy PySceneDetect import;
+- `scenes.json` schema v1, source/settings fingerprints, and cache reuse;
+- dedicated `framing.py` for static and per-shot crop decisions;
+- `--crop-mode scene-smart` with smart crop recalculated for each shot;
+- adjacent crops within 32 pixels merged to reduce unnecessary FFmpeg segments;
+- `scenes` command and scene tuning options;
+- scene-aware FFmpeg rendering with a final subtitle pass;
+- framing plan persisted in each reel `metadata.json`;
+- 34 passing unit tests;
+- successful local integration render with three detected shots, three distinct crops, audio, and burned subtitles.
 
 ## Validation status
 
 Verified in the project environment:
 
 - compilation succeeds;
-- 26 unit tests pass;
-- old SRT/YouTube and transcription tests remain green;
-- word pauses select natural boundaries in synthetic tests;
-- padding does not cross into the next spoken word;
-- cue fallback remains compatible without WhisperX word timestamps.
+- 34 unit tests pass;
+- PySceneDetect 0.7 detects synthetic cuts correctly;
+- scene cache reuse/invalidation works;
+- scene-aware rendering produces a valid vertical MP4 with audio;
+- subtitle burn after scene concatenation works;
+- existing `center`, `face`, `motion`, and `smart` modes remain available.
 
-Still requires a real Windows integration test:
+Still requires Windows/Xplore validation:
 
-- install WhisperX/CUDA 12.8 in Python 3.11;
-- transcribe one representative French MP4 on the RTX 4070;
-- compare `--boundary-mode off` and `auto`;
-- inspect at least 10 proposed starts and ends;
-- record common failures before considering pitch/prosody.
+- install the full environment with Python 3.11;
+- run one representative Xplore MP4 with `--crop-mode smart` and `scene-smart`;
+- compare framing on interviews, monuments, landscapes, and moving subjects;
+- tune `--scene-threshold` only from observed false cuts or missed cuts.
 
 ## Accepted technical debt
 
 1. Ollama candidate/ranking caches are not fully fingerprinted by transcript, prompt and boundary version.
-2. `renderer.py` remains a refactoring hotspot before scene-aware work.
-3. WhisperX aligned segments may need better phone-caption regrouping.
-4. Crop remains static for each reel.
-5. No real FFmpeg, yt-dlp, Ollama or GPU integration tests run in CI.
+2. `renderer.py` still owns subtitle/end-card generation and FFmpeg execution; refactor it before music or B-roll.
+3. Scene-aware rendering encodes each shot separately, then performs a final subtitle pass; reliable but slower.
+4. Face detection still uses a lightweight Haar cascade and can miss profiles or small faces.
+5. No visual aesthetic or semantic relevance score yet.
+6. No real FFmpeg, yt-dlp, Ollama or GPU integration tests run in CI.
 
 ## Next strategic direction
 
-Stabilize version 0.4.0 on a real Xplore video. Depending on the measured result:
+Validate version 0.5.0 on a representative video before adding visual ranking.
 
-- tune pause thresholds and search windows;
-- add a compact boundary comparison report;
-- only then consider pitch/prosody;
-- otherwise move to scene-aware selection with PySceneDetect.
+Possible next iteration after feedback:
 
-Before scene-aware work, propose a small extraction of visual analysis decisions from `renderer.py`.
+- tune scene detection and crop stability;
+- replace Haar face detection with a stronger local person/face detector;
+- begin representative-frame quality scoring for beautiful views;
+- alternatively stabilize Ollama cache fingerprints first.
 
 ## Collaboration protocol
 

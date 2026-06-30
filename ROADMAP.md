@@ -1,68 +1,75 @@
 # Reelmaker roadmap
 
-## Release 0.3.0 — direct MP4 transcription foundation
+## Release 0.3.0 — direct MP4 transcription
 
-Status: implemented; unit-tested; real Windows/GPU validation pending.
+Status: implemented; real Windows/GPU validation pending.
 
-Delivered:
-
-- `TranscriptionProvider` boundary;
 - SRT, YouTube and WhisperX providers;
-- direct `--source-video` transcription;
-- optional/lazy WhisperX dependency;
-- transcript schema v1 with aligned words;
-- source/settings fingerprint cache;
-- Windows Git Bash installation documentation.
+- direct MP4 transcription;
+- word timestamps and fingerprinted transcript cache.
 
 ## Release 0.4.0 — safer spoken boundaries
 
-Status: implemented and unit-tested; real-video validation pending.
+Status: implemented; real-video comparison pending.
+
+- pause-aware beginnings/endings;
+- punctuation and cue fallback;
+- `--boundary-mode auto|words|cues|off`.
+
+## Release 0.5.0 — scene-aware framing
+
+Status: implemented, unit-tested, and synthetic integration-tested.
 
 Delivered:
 
-1. Dedicated `boundary.py` module.
-2. Pause derivation from WhisperX word timestamps.
-3. Start/end scoring with silence, punctuation, cue boundaries and speaker changes.
-4. Candidate cuts snapped to nearby natural boundaries.
-5. Padding limited to actual silence.
-6. Boundary method, score and reasons exposed in JSON and shortlist display.
-7. Cue-based fallback for SRT/VTT and YouTube subtitles.
-8. `--boundary-mode off` for objective before/after comparison.
+1. PySceneDetect adapter and fingerprinted `scenes.json`.
+2. `scenes` command for isolated detection tests.
+3. Framing decisions extracted from rendering.
+4. New `--crop-mode scene-smart`.
+5. One smart crop per detected shot.
+6. Merge of nearly identical adjacent crops.
+7. Multi-shot FFmpeg rendering and final subtitle pass.
+8. Framing plan exposed in reel metadata.
 
-Acceptance still to validate on a representative Xplore video:
+Acceptance to validate on Xplore footage:
 
-- compare at least 10 candidates in `off` and `auto` modes;
-- most selected cuts should start and finish naturally without manual extension;
-- record whether bad endings are caused by missing punctuation, inaccurate word timing or actual prosody.
+- compare `smart` and `scene-smart` on at least three reels;
+- no subject should be lost after a shot change;
+- crop jumps are acceptable only on real cuts;
+- detection should not split camera motion into excessive false scenes.
 
-Do **not** add pitch/prosody before this measurement.
+Useful tuning:
 
-## Stabilization option after real-video test
+```bash
+--scene-threshold 27
+--scene-min-frames 15
+--force-scene-detection
+```
 
-- tune pause thresholds and search windows;
-- add a generated boundary comparison report;
-- improve mobile subtitle grouping if WhisperX cues are too long;
-- fingerprint Ollama analysis caches before changing prompts substantially.
-
-## Iteration 3 — scene-aware selection and framing
-
-- Detect shot boundaries with PySceneDetect.
-- Avoid cuts across transitions.
-- Replace one static crop with per-shot crop decisions.
-- Add face/person tracking only if the simpler approach is insufficient.
-
-Refactoring checkpoint: separate scene analysis and crop decisions from rendering before visual ranking.
+Lower threshold = more detected cuts. Increase it when pans or flashes create false cuts.
 
 ## Iteration 4 — relevant beautiful views / B-roll
 
-- Extract representative frames per shot.
-- Score blur, exposure and stability.
-- Add semantic relevance between transcript and shots.
-- Insert B-roll only above relevance and timing thresholds.
+Refactoring checkpoint: keep frame extraction and scoring outside `renderer.py`.
+
+- extract representative frames per shot;
+- score blur, exposure and stability;
+- add semantic relevance between transcript and shots;
+- propose B-roll, but require human validation before automatic insertion.
 
 ## Iteration 5 — music
 
-- Local licensed music library with tags.
-- Intro/outro selection and automatic ducking.
-- Optional beat-aware cuts.
-- Music disabled by default until rights and loudness rules are configured.
+- local licensed music library with tags;
+- intro/outro selection and automatic ducking;
+- optional beat-aware cuts;
+- disabled by default until rights and loudness rules are configured.
+
+## Stabilization options
+
+Can be selected before Iteration 4 if real tests expose issues:
+
+- stronger face/person detector;
+- scene threshold presets for interview/reportage/drone;
+- fingerprint Ollama analysis caches;
+- reduce scene-aware rendering time;
+- improve WhisperX phone-caption regrouping.

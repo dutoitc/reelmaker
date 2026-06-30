@@ -5,9 +5,10 @@ Generate several vertical reels from a long video with local tools:
 - **WhisperX** for local MP4 transcription and word timestamps;
 - **Ollama** for local reel candidate selection;
 - **FFmpeg** for 9:16 rendering, subtitles, and optional end cards;
-- **OpenCV** for optional smart crop hints.
+- **OpenCV** for local face/motion crop hints;
+- **PySceneDetect** for optional shot detection and per-shot framing.
 
-Version **0.4.0** improves reel beginnings and endings by scoring WhisperX word pauses and punctuation. SRT/VTT and YouTube subtitles remain supported through a cue-based fallback.
+Version **0.5.0** adds scene-aware vertical framing while preserving the existing static crop modes and pause-aware spoken boundaries.
 
 ## Recommended environment
 
@@ -74,13 +75,14 @@ python -m pip install --upgrade pip setuptools wheel
 pip install -e ".[dev,vision,transcription]"
 ```
 
-The `transcription` extra installs the stable WhisperX dependency declared by the project. The `vision` extra enables the current smart-crop functions. The `dev` extra installs the test suite.
+The `transcription` extra installs WhisperX. The `vision` extra installs OpenCV and PySceneDetect for smart and per-shot crops. The `dev` extra installs the test suite.
 
 Verify the environment:
 
 ```bash
 python -c "import whisperx; print('WhisperX OK')"
 python -c "import torch; print('Torch:', torch.__version__); print('CUDA:', torch.cuda.is_available(), torch.version.cuda)"
+python -c "import scenedetect; print('PySceneDetect:', scenedetect.__version__)"
 python -m reelmaker --help
 bash scripts/check_project.sh
 ```
@@ -144,9 +146,47 @@ python -m reelmaker all \
   --model "qwen3:4b" \
   --target-count 10 \
   --ranking-mode local \
-  --crop-mode smart \
+  --crop-mode scene-smart \
   --output-dir "output/reportage"
 ```
+
+## Scene-aware framing
+
+The existing default remains the fast static crop:
+
+```bash
+--crop-mode smart
+```
+
+For reportages with several camera shots, enable one crop decision per detected shot:
+
+```bash
+python -m reelmaker all \
+  --source-video "/c/Videos/reportage.mp4" \
+  --crop-mode scene-smart \
+  --output-dir "output/reportage"
+```
+
+Reelmaker uses local PySceneDetect, writes `scenes.json`, recalculates face/motion framing for each shot, and stores the resulting `framing_plan` in each reel `metadata.json`. Similar adjacent crops are merged to avoid unnecessary rendering segments.
+
+Test scene detection alone:
+
+```bash
+python -m reelmaker scenes \
+  --source-video "/c/Videos/reportage.mp4" \
+  --output-dir "output/reportage"
+```
+
+Parameters:
+
+| Parameter | Default | Usage |
+|---|---:|---|
+| `--scene-threshold` | `27` | lower detects more cuts; raise it for false cuts |
+| `--scene-min-frames` | `15` | ignores very short shots/transitions |
+| `--force-scene-detection` | off | rebuild `scenes.json` |
+| `--scene-detection off` | — | use a single static smart crop even with `scene-smart` |
+
+PySceneDetect is pinned to `>=0.7,<0.8` because its public Python API is still evolving. Scene-aware mode is slower than static smart crop because each shot is rendered separately before final concatenation and subtitle burn.
 
 ## Natural cut refinement
 
@@ -250,6 +290,14 @@ Force a source with:
 
 ## Troubleshooting
 
+### `PySceneDetect is not installed`
+
+```bash
+source .venv/Scripts/activate
+pip install -e ".[vision]"
+python -c "import scenedetect; print(scenedetect.__version__)"
+```
+
 ### `ffmpeg: command not found`
 
 The extracted FFmpeg `bin` directory is not in the Windows `PATH`, or Git Bash was not reopened after the change.
@@ -296,6 +344,8 @@ ollama run qwen3:4b "OK"
 
 Invalidate it with `--force-transcription`.
 
+`scenes.json` is reused only when the sampled video fingerprint and scene settings match. Invalidate it with `--force-scene-detection`.
+
 Ollama candidate caches remain under `output/.../logs/` and can be invalidated with `--force-ollama`.
 
 ## Main output structure
@@ -307,6 +357,7 @@ output/reportage/
   transcript.json
   transcript.srt
   transcript.txt
+  scenes.json          # generated when scene-smart/scenes is used
   transcript_chunks.json
   candidates.json
   shortlist.json
@@ -328,7 +379,7 @@ pip install -e ".[dev]"
 bash scripts/check_project.sh
 ```
 
-The base CI test suite does not load a real WhisperX model. The adapter uses an injected fake module; GPU processing remains a Windows integration test.
+The base CI suite does not load a real WhisperX model or decode a real video with PySceneDetect. Those adapters are unit-tested with injected fakes; Windows GPU processing remains an integration test.
 
 ## Create a clean archive for ChatGPT
 

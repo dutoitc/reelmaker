@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import re
+import shutil
 import textwrap
 from pathlib import Path
 from typing import Any
 
+from .framing import FramingSegment, build_framing_plan
 from .models import ReelSelection, SubtitleCue
 from .ollama_client import OllamaClient
+from .scene_analysis import Scene
 from .subtitle_corrector import maybe_correct_cues
 from .subtitles import cues_for_segment, write_srt
 from .timecode import format_hms
 from .utils import run_command, write_json
-from .vision import CropHint, detect_smart_crop_hint
+from .vision import CropHint
 
 
 def _ass_time(seconds: float) -> str:
@@ -227,6 +230,159 @@ def _concat_videos(*, reel_dir: Path, parts: list[Path], output_video: Path) -> 
     return run_command(cmd, cwd=reel_dir, check=False).returncode == 0
 
 
+
+def _content_encode_args(*, fps: int, crf: int, preset: str) -> list[str]:
+    return [
+        "-r",
+        str(fps),
+        "-c:v",
+        "libx264",
+        "-preset",
+        preset,
+        "-crf",
+        str(crf),
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "160k",
+        "-ar",
+        "48000",
+        "-ac",
+        "2",
+        "-movflags",
+        "+faststart",
+    ]
+
+
+def _render_framing_segment(
+    *,
+    source_video: Path,
+    segment: FramingSegment,
+    output_path: Path,
+    work_dir: Path,
+    fps: int,
+    crf: int,
+    preset: str,
+) -> tuple[bool, str]:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-ss",
+        f"{segment.start:.3f}",
+        "-t",
+        f"{segment.duration:.3f}",
+        "-i",
+        str(source_video.resolve()),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-vf",
+        _video_filter(burn_subtitles=False, crop_hint=segment.crop_hint),
+        *_content_encode_args(fps=fps, crf=crf, preset=preset),
+        str(output_path.name),
+    ]
+    completed = run_command(cmd, cwd=work_dir, check=False)
+    return completed.returncode == 0, completed.stdout or ""
+
+
+def _burn_subtitles_on_video(
+    *,
+    reel_dir: Path,
+    input_video: Path,
+    output_video: Path,
+    fps: int,
+    crf: int,
+    preset: str,
+) -> tuple[bool, str]:
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_video.relative_to(reel_dir)),
+        "-vf",
+        "subtitles=subtitles.ass,format=yuv420p",
+        "-r",
+        str(fps),
+        "-c:v",
+        "libx264",
+        "-preset",
+        preset,
+        "-crf",
+        str(crf),
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(output_video.name),
+    ]
+    completed = run_command(cmd, cwd=reel_dir, check=False)
+    return completed.returncode == 0, completed.stdout or ""
+
+
+def _render_scene_aware_content(
+    *,
+    source_video: Path,
+    framing_plan: list[FramingSegment],
+    reel_dir: Path,
+    content_video: Path,
+    burn_subtitles: bool,
+    fps: int,
+    crf: int,
+    preset: str,
+) -> tuple[bool, list[str], str]:
+    warnings: list[str] = []
+    segments_dir = reel_dir / "_scene_segments"
+    shutil.rmtree(segments_dir, ignore_errors=True)
+    segments_dir.mkdir(parents=True, exist_ok=True)
+
+    parts: list[Path] = []
+    for index, segment in enumerate(framing_plan, start=1):
+        part = segments_dir / f"part_{index:03d}.mp4"
+        ok, log = _render_framing_segment(
+            source_video=source_video,
+            segment=segment,
+            output_path=part,
+            work_dir=segments_dir,
+            fps=fps,
+            crf=crf,
+            preset=preset,
+        )
+        if not ok:
+            return False, warnings + [f"scene_segment_{index}_failed"], log
+        parts.append(part)
+
+    assembled = segments_dir / "assembled.mp4"
+    if not _concat_videos(reel_dir=segments_dir, parts=parts, output_video=assembled):
+        return False, warnings + ["scene_concat_failed"], ""
+
+    if burn_subtitles:
+        ok, log = _burn_subtitles_on_video(
+            reel_dir=reel_dir,
+            input_video=assembled,
+            output_video=content_video,
+            fps=fps,
+            crf=crf,
+            preset=preset,
+        )
+        if not ok:
+            warnings.append("subtitle_burn_failed_retry_without_subtitles")
+            shutil.copyfile(assembled, content_video)
+            if content_video.exists():
+                shutil.rmtree(segments_dir, ignore_errors=True)
+                return True, warnings, log
+            return False, warnings, log
+    else:
+        shutil.copyfile(assembled, content_video)
+
+    shutil.rmtree(segments_dir, ignore_errors=True)
+    return True, warnings, ""
+
+
 def render_reel(
     *,
     source_video: Path,
@@ -242,6 +398,7 @@ def render_reel(
     subtitle_correction_client: OllamaClient | None = None,
     force_subtitle_correction: bool = False,
     crop_mode: str = "smart",
+    scenes: list[Scene] | None = None,
     fps: int = 25,
     end_card_seconds: float = 0.0,
     end_card_style: str = "short",
@@ -277,15 +434,6 @@ def render_reel(
         max_lines=subtitle_max_lines,
     )
 
-    metadata_path = reel_dir / "metadata.json"
-    metadata = selection.to_dict()
-    metadata["episode_title"] = episode_title
-    metadata["youtube_url"] = youtube_url
-    metadata["end_card_seconds"] = end_card_seconds
-    metadata["end_card_style"] = end_card_style
-    metadata["subtitle_correction"] = subtitle_correction
-    write_json(metadata_path, metadata)
-
     caption_path = reel_dir / "caption.txt"
     caption_parts = [selection.hook, selection.title]
     if episode_title:
@@ -300,48 +448,26 @@ def render_reel(
     end_card_video = reel_dir / f"{selection.id}_end_card.mp4"
     duration = max(0.1, selection.end - selection.start)
 
-    crop_hint = CropHint(None, "center")
-    if crop_mode in {"face", "motion", "smart"}:
-        crop_hint = detect_smart_crop_hint(source_video=source_video, start=selection.start, duration=duration, mode=crop_mode)
+    framing_plan = build_framing_plan(
+        source_video=source_video,
+        start=selection.start,
+        end=selection.end,
+        crop_mode=crop_mode,
+        scenes=scenes,
+    )
+    if not framing_plan:
+        framing_plan = [FramingSegment(selection.start, selection.end, CropHint(None, "center_fallback", 0.0))]
 
-    def build_cmd(with_subtitles: bool) -> list[str]:
-        return [
-            "ffmpeg",
-            "-y",
-            "-ss",
-            f"{selection.start:.3f}",
-            "-t",
-            f"{duration:.3f}",
-            "-i",
-            str(source_video.resolve()),
-            "-map",
-            "0:v:0",
-            "-map",
-            "0:a?",
-            "-vf",
-            _video_filter(burn_subtitles=with_subtitles, crop_hint=crop_hint),
-            "-r",
-            str(fps),
-            "-c:v",
-            "libx264",
-            "-preset",
-            preset,
-            "-crf",
-            str(crf),
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "160k",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-movflags",
-            "+faststart",
-            str(content_video.name),
-        ]
+    metadata_path = reel_dir / "metadata.json"
+    metadata = selection.to_dict()
+    metadata["episode_title"] = episode_title
+    metadata["youtube_url"] = youtube_url
+    metadata["end_card_seconds"] = end_card_seconds
+    metadata["end_card_style"] = end_card_style
+    metadata["subtitle_correction"] = subtitle_correction
+    metadata["crop_mode"] = crop_mode
+    metadata["framing_plan"] = [segment.to_dict() for segment in framing_plan]
+    write_json(metadata_path, metadata)
 
     result = {
         "id": selection.id,
@@ -358,23 +484,66 @@ def render_reel(
         "metadata": str(metadata_path),
         "caption": str(caption_path),
         "crop_mode": crop_mode,
-        "crop_hint": crop_hint.reason,
-        "crop_confidence": crop_hint.confidence,
+        "crop_hint": framing_plan[0].crop_hint.reason if len(framing_plan) == 1 else "per_scene",
+        "crop_confidence": round(
+            sum(segment.crop_hint.confidence for segment in framing_plan) / max(1, len(framing_plan)),
+            3,
+        ),
+        "framing_segments": len(framing_plan),
         "subtitle_correction": subtitle_correction,
         "status": "ok",
         "warnings": [],
     }
 
-    completed = run_command(build_cmd(burn_subtitles), cwd=reel_dir, check=False)
-    if completed.returncode != 0 and burn_subtitles:
-        result["warnings"].append("subtitle_burn_failed_retry_without_subtitles")
-        completed = run_command(build_cmd(False), cwd=reel_dir, check=False)
+    if len(framing_plan) > 1:
+        ok, warnings, log = _render_scene_aware_content(
+            source_video=source_video,
+            framing_plan=framing_plan,
+            reel_dir=reel_dir,
+            content_video=content_video,
+            burn_subtitles=burn_subtitles,
+            fps=fps,
+            crf=crf,
+            preset=preset,
+        )
+        result["warnings"].extend(warnings)
+        if not ok:
+            result["status"] = "error"
+            (reel_dir / "ffmpeg.error.txt").write_text(log, encoding="utf-8")
+            return result
+    else:
+        crop_hint = framing_plan[0].crop_hint
 
-    if completed.returncode != 0:
-        result["status"] = "error"
-        result["warnings"].append(f"ffmpeg_exit_{completed.returncode}")
-        (reel_dir / "ffmpeg.error.txt").write_text(completed.stdout or "", encoding="utf-8")
-        return result
+        def build_cmd(with_subtitles: bool) -> list[str]:
+            return [
+                "ffmpeg",
+                "-y",
+                "-ss",
+                f"{selection.start:.3f}",
+                "-t",
+                f"{duration:.3f}",
+                "-i",
+                str(source_video.resolve()),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-vf",
+                _video_filter(burn_subtitles=with_subtitles, crop_hint=crop_hint),
+                *_content_encode_args(fps=fps, crf=crf, preset=preset),
+                str(content_video.name),
+            ]
+
+        completed = run_command(build_cmd(burn_subtitles), cwd=reel_dir, check=False)
+        if completed.returncode != 0 and burn_subtitles:
+            result["warnings"].append("subtitle_burn_failed_retry_without_subtitles")
+            completed = run_command(build_cmd(False), cwd=reel_dir, check=False)
+
+        if completed.returncode != 0:
+            result["status"] = "error"
+            result["warnings"].append(f"ffmpeg_exit_{completed.returncode}")
+            (reel_dir / "ffmpeg.error.txt").write_text(completed.stdout or "", encoding="utf-8")
+            return result
 
     if end_card_seconds > 0:
         ok_card = _render_end_card(
@@ -395,11 +564,11 @@ def render_reel(
             if not ok_concat:
                 result["warnings"].append("end_card_concat_failed_content_only")
                 if content_video != output_video:
-                    output_video.write_bytes(content_video.read_bytes())
+                    shutil.copyfile(content_video, output_video)
         else:
             result["warnings"].append("end_card_render_failed_content_only")
             if content_video != output_video:
-                output_video.write_bytes(content_video.read_bytes())
+                shutil.copyfile(content_video, output_video)
 
     return result
 
@@ -419,6 +588,7 @@ def render_reels(
     subtitle_correction_client: OllamaClient | None = None,
     force_subtitle_correction: bool = False,
     crop_mode: str = "smart",
+    scenes: list[Scene] | None = None,
     fps: int = 25,
     end_card_seconds: float = 0.0,
     end_card_style: str = "short",
@@ -447,6 +617,7 @@ def render_reels(
                 subtitle_correction_client=subtitle_correction_client,
                 force_subtitle_correction=force_subtitle_correction,
                 crop_mode=crop_mode,
+                scenes=scenes,
                 fps=fps,
                 end_card_seconds=end_card_seconds,
                 end_card_style=end_card_style,

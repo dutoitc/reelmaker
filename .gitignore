@@ -41,3 +41,5 @@ Thumbs.db
 # Temporary archives
 *.tgz
 *.tar.gz
+
+run_*

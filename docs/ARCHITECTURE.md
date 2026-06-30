@@ -10,84 +10,73 @@ MP4 / SRT / YouTube
   -> Ollama candidate generation
   -> boundary refinement and ranking
   -> human selection
-  -> subtitle correction + crop hint
-  -> FFmpeg render
+  -> optional SceneDocument schema v1
+  -> framing plan
+  -> subtitle correction + FFmpeg render
 ```
 
 ## Module responsibilities
 
 - `cli.py`: command orchestration and dependency wiring only.
-- `models.py`: shared typed dataclasses and transcript schema version.
-- `transcription.py`: provider protocol and SRT, YouTube, WhisperX adapters.
-- `transcript_io.py`: JSON/SRT persistence and cache fingerprints.
+- `models.py`: shared transcript/candidate dataclasses.
+- `transcription.py`: SRT, YouTube and WhisperX providers.
+- `transcript_io.py`: transcript JSON/SRT persistence and fingerprints.
 - `subtitles.py`: parsing, chunking and reel subtitle normalization.
 - `youtube.py`: yt-dlp adapter.
 - `ollama_client.py`: Ollama HTTP adapter and JSON extraction.
 - `analyzer.py`: candidate generation, ranking and human selection.
 - `boundary.py`: pause/cue boundary scoring and cut snapping.
-- `vision.py`: lightweight crop hints.
-- `renderer.py`: ASS/caption generation and FFmpeg rendering.
+- `scene_analysis.py`: PySceneDetect adapter, scene schema and cache.
+- `vision.py`: lightweight face/motion crop hints.
+- `framing.py`: static or per-shot crop plan; no FFmpeg execution.
+- `renderer.py`: executes framing plans, subtitles, end cards and FFmpeg rendering.
 
-## Transcription boundary
+## Scene boundary
+
+`scene_analysis.py` imports PySceneDetect lazily. The rest of the application consumes:
 
 ```text
-TranscriptionProvider
-  source
-  source_fingerprint()
-  settings()
-  transcribe() -> TranscriptionResult
-
-providers:
-  LocalSubtitleProvider
-  YouTubeSubtitleProvider
-  WhisperXProvider
+SceneDocument schema v1
+  source fingerprint
+  detector settings fingerprint
+  list of Scene(start, end)
 ```
 
-Downstream code consumes `TranscriptDocument` and does not know which provider produced it.
+The cache is reused only when the video fingerprint and detector settings match.
 
-WhisperX is imported lazily inside `WhisperXProvider.transcribe()`. Base CLI startup and SRT/YouTube use do not load Torch or WhisperX.
+## Framing boundary
 
-## Transcript schema v1
+`framing.py` receives:
 
-`transcript.json` contains:
+- source video;
+- selected reel start/end;
+- crop mode;
+- optional detected scenes.
 
-- provider and language;
-- source identity and source fingerprint;
-- settings and settings fingerprint;
-- normalized subtitle cues;
-- aligned words with cue link, start/end, confidence and optional speaker.
+It returns a list of `FramingSegment` values with explicit source intervals and `CropHint` decisions. It never invokes FFmpeg.
 
-The cache is valid only when provider, source fingerprint and settings fingerprint match.
+Modes:
 
-## Boundary analysis
+- `center`, `face`, `motion`, `smart`: one framing segment;
+- `scene-smart`: one smart decision per detected shot, with similar adjacent crops merged.
 
-`boundary.py` consumes only normalized `SubtitleCue` and `TranscriptWord` objects.
-
-Word mode builds possible boundaries at word starts and ends, then scores:
-
-- actual silence before/after the word;
-- sentence punctuation;
-- subtitle cue transition;
-- optional speaker transition;
-- distance from the candidate proposed by Ollama.
-
-Pre/post padding is clamped to available silence. It must never extend into the next spoken word.
-
-Cue mode provides backward compatibility for SRT/VTT sources. Boundary metadata is optional, so older candidate cache files remain readable.
+The renderer executes one segment directly or renders multiple shot segments and concatenates them before subtitles are burned.
 
 ## Anti-spaghetti constraints
 
-- do not put transcription implementation in `cli.py`;
-- do not make `analyzer.py` depend directly on WhisperX structures;
-- keep boundary/prosody analysis outside `analyzer.py`;
-- add pitch as a separate signal in `boundary.py` or a dedicated prosody module only after measurement;
-- add scene analysis outside `renderer.py`, then pass explicit scene decisions;
-- keep provider failures explicit; no silent cloud fallback;
-- add a schema version before changing persisted transcript structure.
+- no transcription implementation in `cli.py`;
+- no WhisperX structures in `analyzer.py`;
+- no PySceneDetect structures outside `scene_analysis.py`;
+- no crop decision algorithms in `renderer.py`;
+- no FFmpeg commands in `framing.py`;
+- visual scoring/B-roll must be a new module, not additions to `renderer.py`;
+- provider failures remain explicit; no cloud fallback;
+- persisted structure changes require a schema version.
 
 ## Deliberate non-goals
 
-- no diarization workflow exposed yet;
 - no pitch/prosody scoring yet;
-- no scene ranking or B-roll yet;
-- no database or web framework while the CLI pipeline is evolving.
+- no visual aesthetic or semantic scoring yet;
+- no B-roll insertion yet;
+- no music workflow yet;
+- no web framework while the CLI pipeline is evolving.
