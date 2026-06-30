@@ -1,51 +1,48 @@
 # Reelmaker roadmap
 
-## Release 0.2.3 — publishable MVP
+## Release 0.3.0 — direct MP4 transcription foundation
 
-Status: ready after local checks.
+Status: implemented; unit-tested; real Windows/GPU validation pending.
 
-- Clean source archive and Git ignore rules.
-- CI tests on Python 3.10, 3.12, and 3.13.
-- Reproducible project checks and a root `createTarGz.sh` archive script.
-- Coding-assistant workflow and architecture guardrails.
+Delivered:
 
-Known debt accepted for this MVP:
+- `TranscriptionProvider` boundary;
+- SRT, YouTube and WhisperX providers;
+- direct `--source-video` transcription;
+- optional/lazy WhisperX dependency;
+- transcript schema v1 with aligned words;
+- source/settings fingerprint cache;
+- Windows Git Bash installation documentation.
 
-- candidate cache has no full content/config fingerprint;
-- one output directory should currently be used for one source project;
-- `analyzer.py` and `renderer.py` are refactoring hotspots;
-- vertical crop is static per reel.
+## Release 0.4.0 — safer spoken boundaries
 
-## Iteration 1 — direct MP4 transcription foundation
+Status: implemented and unit-tested; real-video validation pending.
 
-Objective: accept `--source-video video.mp4` without requiring YouTube or an external SRT.
+Delivered:
 
-Planned slice:
+1. Dedicated `boundary.py` module.
+2. Pause derivation from WhisperX word timestamps.
+3. Start/end scoring with silence, punctuation, cue boundaries and speaker changes.
+4. Candidate cuts snapped to nearby natural boundaries.
+5. Padding limited to actual silence.
+6. Boundary method, score and reasons exposed in JSON and shortlist display.
+7. Cue-based fallback for SRT/VTT and YouTube subtitles.
+8. `--boundary-mode off` for objective before/after comparison.
 
-1. Add a small `TranscriptionProvider` protocol.
-2. Wrap the current subtitle-file/YouTube path as a provider.
-3. Add a WhisperX provider behind an optional `transcription` dependency.
-4. Produce normalized `transcript.json` plus SRT from the same internal model.
-5. Cache transcription using source-file fingerprint + settings.
+Acceptance still to validate on a representative Xplore video:
 
-Acceptance criteria:
+- compare at least 10 candidates in `off` and `auto` modes;
+- most selected cuts should start and finish naturally without manual extension;
+- record whether bad endings are caused by missing punctuation, inaccurate word timing or actual prosody.
 
-- a local MP4 produces usable French cues with word-level timing data retained;
-- current YouTube/SRT modes still pass their tests;
-- WhisperX is not imported when its mode is unused;
-- Windows Git Bash setup is documented and reproducible.
+Do **not** add pitch/prosody before this measurement.
 
-Refactoring checkpoint: validate the provider boundary before adding prosody or diarization.
+## Stabilization option after real-video test
 
-## Iteration 2 — safer spoken boundaries
-
-Objective: reduce starts/ends in the middle of speech.
-
-- Use word timestamps, VAD silences, punctuation, and speech energy.
-- Add a boundary score and expose reasons in candidate JSON.
-- Add optional pitch/prosody analysis only after a baseline with silence + text is measured.
-
-Acceptance criterion: on a reference video, most selected cuts start and finish naturally without manual extension.
+- tune pause thresholds and search windows;
+- add a generated boundary comparison report;
+- improve mobile subtitle grouping if WhisperX cues are too long;
+- fingerprint Ollama analysis caches before changing prompts substantially.
 
 ## Iteration 3 — scene-aware selection and framing
 
@@ -54,18 +51,18 @@ Acceptance criterion: on a reference video, most selected cuts start and finish 
 - Replace one static crop with per-shot crop decisions.
 - Add face/person tracking only if the simpler approach is insufficient.
 
-Refactoring checkpoint: separate scene analysis from rendering before adding visual ranking.
+Refactoring checkpoint: separate scene analysis and crop decisions from rendering before visual ranking.
 
 ## Iteration 4 — relevant beautiful views / B-roll
 
 - Extract representative frames per shot.
-- Score technical quality: blur, exposure, stability.
+- Score blur, exposure and stability.
 - Add semantic relevance between transcript and shots.
-- Insert B-roll only when relevance and timing thresholds are met.
+- Insert B-roll only above relevance and timing thresholds.
 
 ## Iteration 5 — music
 
 - Local licensed music library with tags.
-- Intro/outro selection and automatic ducking under speech.
+- Intro/outro selection and automatic ducking.
 - Optional beat-aware cuts.
-- Music remains disabled by default until rights and loudness rules are configured.
+- Music disabled by default until rights and loudness rules are configured.

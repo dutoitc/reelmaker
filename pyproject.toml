@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reelmaker"
-version = "0.2.3"
-description = "Generate vertical reels from a local video using YouTube subtitles and Ollama."
+version = "0.4.0"
+description = "Generate vertical reels from a local video using local transcription and Ollama."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -23,6 +23,7 @@ include = ["reelmaker*"]
 
 [project.optional-dependencies]
 vision = ["opencv-python>=4.9.0", "numpy>=1.26"]
+transcription = ["whisperx>=3.8.6,<3.9"]
 dev = ["pytest>=8,<9"]
 
 [tool.pytest.ini_options]

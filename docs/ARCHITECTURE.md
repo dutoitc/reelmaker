@@ -1,52 +1,93 @@
 # Architecture
 
-## Current pipeline
+## Pipeline
 
 ```text
-subtitle file or YouTube
-  -> SubtitleCue list
+MP4 / SRT / YouTube
+  -> TranscriptionProvider
+  -> TranscriptDocument schema v1
   -> transcript chunks
   -> Ollama candidate generation
-  -> local/optional Ollama ranking
+  -> boundary refinement and ranking
   -> human selection
   -> subtitle correction + crop hint
   -> FFmpeg render
 ```
 
-## Current module responsibilities
+## Module responsibilities
 
-- `cli.py`: command-line orchestration and dependency wiring.
-- `models.py`: shared dataclasses.
-- `subtitles.py`: subtitle parsing, chunking, and segment normalization.
+- `cli.py`: command orchestration and dependency wiring only.
+- `models.py`: shared typed dataclasses and transcript schema version.
+- `transcription.py`: provider protocol and SRT, YouTube, WhisperX adapters.
+- `transcript_io.py`: JSON/SRT persistence and cache fingerprints.
+- `subtitles.py`: parsing, chunking and reel subtitle normalization.
 - `youtube.py`: yt-dlp adapter.
 - `ollama_client.py`: Ollama HTTP adapter and JSON extraction.
-- `analyzer.py`: candidate generation, boundary refinement, ranking, selection.
+- `analyzer.py`: candidate generation, ranking and human selection.
+- `boundary.py`: pause/cue boundary scoring and cut snapping.
 - `vision.py`: lightweight crop hints.
 - `renderer.py`: ASS/caption generation and FFmpeg rendering.
 
-## Target boundary for direct MP4 input
-
-Do not add WhisperX calls directly to `cli.py` or `subtitles.py`.
+## Transcription boundary
 
 ```text
 TranscriptionProvider
-  transcribe(request) -> TranscriptResult
+  source
+  source_fingerprint()
+  settings()
+  transcribe() -> TranscriptionResult
 
 providers:
-  ExistingSubtitleProvider
+  LocalSubtitleProvider
   YouTubeSubtitleProvider
   WhisperXProvider
 ```
 
-`TranscriptResult` should contain normalized cues, optional words, language, provider metadata, and a cache signature. Downstream analysis should consume this result without knowing which provider produced it.
+Downstream code consumes `TranscriptDocument` and does not know which provider produced it.
 
-## Output compatibility
+WhisperX is imported lazily inside `WhisperXProvider.transcribe()`. Base CLI startup and SRT/YouTube use do not load Torch or WhisperX.
 
-JSON is the interchange format between expensive stages. New schemas should include a `schema_version`. Cache reuse must depend on both input fingerprint and processing settings.
+## Transcript schema v1
+
+`transcript.json` contains:
+
+- provider and language;
+- source identity and source fingerprint;
+- settings and settings fingerprint;
+- normalized subtitle cues;
+- aligned words with cue link, start/end, confidence and optional speaker.
+
+The cache is valid only when provider, source fingerprint and settings fingerprint match.
+
+## Boundary analysis
+
+`boundary.py` consumes only normalized `SubtitleCue` and `TranscriptWord` objects.
+
+Word mode builds possible boundaries at word starts and ends, then scores:
+
+- actual silence before/after the word;
+- sentence punctuation;
+- subtitle cue transition;
+- optional speaker transition;
+- distance from the candidate proposed by Ollama.
+
+Pre/post padding is clamped to available silence. It must never extend into the next spoken word.
+
+Cue mode provides backward compatibility for SRT/VTT sources. Boundary metadata is optional, so older candidate cache files remain readable.
+
+## Anti-spaghetti constraints
+
+- do not put transcription implementation in `cli.py`;
+- do not make `analyzer.py` depend directly on WhisperX structures;
+- keep boundary/prosody analysis outside `analyzer.py`;
+- add pitch as a separate signal in `boundary.py` or a dedicated prosody module only after measurement;
+- add scene analysis outside `renderer.py`, then pass explicit scene decisions;
+- keep provider failures explicit; no silent cloud fallback;
+- add a schema version before changing persisted transcript structure.
 
 ## Deliberate non-goals
 
-- no database until local JSON becomes demonstrably insufficient;
-- no web framework before the CLI pipeline is stable;
-- no plugin framework for only two providers;
-- no large model abstraction layer beyond the concrete need.
+- no diarization workflow exposed yet;
+- no pitch/prosody scoring yet;
+- no scene ranking or B-roll yet;
+- no database or web framework while the CLI pipeline is evolving.

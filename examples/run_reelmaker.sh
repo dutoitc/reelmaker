@@ -2,12 +2,10 @@
 set -euo pipefail
 
 # Adapt these values.
-YOUTUBE_URL="https://www.youtube.com/watch?v=VIDEO_ID"
-SOURCE_VIDEO="/c/Users/YourName/Videos/source.mp4"
-OUTPUT_DIR="output/my-video"
+SOURCE_VIDEO="/c/Videos/reportage.mp4"
+OUTPUT_DIR="output/reportage"
 OLLAMA_URL="http://localhost:11434"
 MODEL="qwen3:4b"
-SUBTITLE_LANGS="fr.*,fr"
 EPISODE_TITLE="Titre de l'episode YouTube"
 
 # Git Bash compatible venv activation.
@@ -15,15 +13,15 @@ if [ -d ".venv" ]; then
   source .venv/Scripts/activate 2>/dev/null || source .venv/bin/activate
 fi
 
-# If accents are mojibaked in Git Bash, keep this disabled.
-# export REELMAKER_UNICODE_CONSOLE=1
-
 python -m reelmaker all \
-  --youtube-url "$YOUTUBE_URL" \
   --source-video "$SOURCE_VIDEO" \
+  --transcription whisperx \
+  --whisper-model "large-v3" \
+  --whisper-language "fr" \
+  --whisper-device "auto" \
+  --whisper-batch-size 4 \
   --ollama-url "$OLLAMA_URL" \
   --model "$MODEL" \
-  --subtitle-langs "$SUBTITLE_LANGS" \
   --target-count 10 \
   --shortlist-count 20 \
   --candidates-per-chunk 3 \

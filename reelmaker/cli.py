@@ -4,32 +4,40 @@ import argparse
 from pathlib import Path
 from typing import Any
 
-from .console import configure_console
 from .analyzer import (
     generate_candidates,
     interactive_select,
     make_default_selections,
     rank_candidates,
-    refine_candidate_boundaries,
     save_analysis_outputs,
 )
-from .models import ProjectPaths, ReelSelection
+from .boundary import refine_candidate_boundaries
+from .console import configure_console
+from .models import ProjectPaths, ReelSelection, TranscriptDocument
 from .ollama_client import OllamaClient
 from .renderer import render_reels
-from .subtitles import chunk_transcript, load_subtitles, transcript_to_text
+from .subtitles import chunk_transcript
 from .timecode import parse_timecode
+from .transcription import (
+    LocalSubtitleProvider,
+    TranscriptionProvider,
+    WhisperXConfig,
+    WhisperXProvider,
+    YouTubeSubtitleProvider,
+    load_or_transcribe,
+)
 from .utils import fail, read_json, write_json
-from .youtube import copy_local_subtitle, download_youtube_video, extract_youtube_subtitles
+from .youtube import download_youtube_video
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="reelmaker",
-        description="Generate vertical reels from a local video using YouTube subtitles and Ollama.",
+        description="Generate vertical reels from a local video using local transcription and Ollama.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ["all", "analyze", "render", "subtitles"]:
+    for name in ["all", "analyze", "render", "transcribe", "subtitles"]:
         add_common_args(sub.add_parser(name))
     return parser
 
@@ -38,9 +46,22 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--youtube-url", help="YouTube URL used to extract subtitles, and optionally video.")
     parser.add_argument("--source-video", type=Path, help="Local source video. Preferred for quality.")
     parser.add_argument("--download-video", action="store_true", help="Download YouTube video if --source-video is not provided.")
-    parser.add_argument("--subtitle-file", type=Path, help="Existing SRT/VTT file. If omitted, subtitles are extracted from YouTube.")
+    parser.add_argument("--subtitle-file", type=Path, help="Existing SRT/VTT file.")
     parser.add_argument("--subtitle-langs", default="fr.*,fr", help="yt-dlp subtitle language selector. Default avoids en.* to reduce YouTube 429 errors.")
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="Output directory.")
+
+    parser.add_argument(
+        "--transcription",
+        choices=["auto", "subtitles", "whisperx"],
+        default="auto",
+        help="Transcript source. auto preserves SRT/YouTube when supplied, otherwise uses WhisperX for a local video.",
+    )
+    parser.add_argument("--force-transcription", action="store_true", help="Ignore transcript cache and transcribe again.")
+    parser.add_argument("--whisper-model", default="large-v3", help="WhisperX ASR model. large-v3 favors French quality on a 12 GB GPU.")
+    parser.add_argument("--whisper-language", default="fr", help="WhisperX language code, or auto for detection.")
+    parser.add_argument("--whisper-device", choices=["auto", "cuda", "cpu"], default="auto", help="WhisperX device.")
+    parser.add_argument("--whisper-compute-type", default="auto", help="WhisperX compute type. auto uses float16 on CUDA and int8 on CPU.")
+    parser.add_argument("--whisper-batch-size", type=int, default=4, help="WhisperX batch size. Reduce if GPU memory is insufficient.")
 
     parser.add_argument("--ollama-url", default="http://localhost:11434", help="Ollama base URL.")
     parser.add_argument("--model", default="qwen3:4b", help="Ollama model. Default favors speed for local reel selection.")
@@ -59,7 +80,13 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--target-duration", type=int, default=22, help="Preferred duration for short reels; boundaries may be expanded toward this value.")
     parser.add_argument("--max-duration", type=int, default=60, help="Maximum reel duration in seconds.")
     parser.add_argument("--pre-padding", type=float, default=0.25, help="Seconds added before the first subtitle cue when refining boundaries.")
-    parser.add_argument("--post-padding", type=float, default=1.2, help="Seconds added after the last subtitle cue when refining boundaries.")
+    parser.add_argument("--post-padding", type=float, default=1.2, help="Seconds added after the selected speech boundary.")
+    parser.add_argument(
+        "--boundary-mode",
+        choices=["auto", "words", "cues", "off"],
+        default="auto",
+        help="Cut refinement source. auto uses WhisperX word pauses when available, otherwise subtitle cues.",
+    )
     parser.add_argument("--yes", action="store_true", help="Non-interactive: accept top ranked reels.")
     parser.add_argument("--ranking-mode", choices=["local", "ollama"], default="local", help="Ranking strategy. Local is much faster and avoids malformed LLM JSON.")
     parser.add_argument("--no-resume", action="store_true", help="Disable resume/cache of previous Ollama chunk results.")
@@ -85,16 +112,6 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--preset", default="medium", help="FFmpeg x264 preset.")
 
 
-def resolve_subtitles(args: argparse.Namespace, paths: ProjectPaths) -> Path:
-    if args.subtitle_file:
-        if not args.subtitle_file.exists():
-            fail(f"Subtitle file not found: {args.subtitle_file}")
-        return copy_local_subtitle(args.subtitle_file, paths.subtitles_dir)
-    if args.youtube_url:
-        return extract_youtube_subtitles(args.youtube_url, paths.subtitles_dir, subtitle_langs=args.subtitle_langs)
-    fail("Provide --subtitle-file or --youtube-url.")
-
-
 def resolve_source_video(args: argparse.Namespace, paths: ProjectPaths) -> Path:
     if args.source_video:
         if not args.source_video.exists():
@@ -105,19 +122,57 @@ def resolve_source_video(args: argparse.Namespace, paths: ProjectPaths) -> Path:
     fail("Provide --source-video, or add --download-video with --youtube-url.")
 
 
-def load_transcript(args: argparse.Namespace, paths: ProjectPaths) -> tuple[Path, list[Any]]:
-    subtitle_path = resolve_subtitles(args, paths)
-    cues = load_subtitles(subtitle_path)
-    if not cues:
-        fail(f"No subtitle cues loaded from {subtitle_path}")
+def choose_transcription_mode(args: argparse.Namespace) -> str:
+    if args.transcription != "auto":
+        return args.transcription
+    if args.subtitle_file or args.youtube_url:
+        return "subtitles"
+    if args.source_video:
+        return "whisperx"
+    fail("Provide --source-video, --subtitle-file, or --youtube-url.")
 
-    write_json(
-        paths.output_dir / "transcript.json",
-        [{"index": c.index, "start": c.start, "end": c.end, "text": c.text} for c in cues],
+
+def make_transcription_provider(args: argparse.Namespace, paths: ProjectPaths) -> TranscriptionProvider:
+    mode = choose_transcription_mode(args)
+    if mode == "subtitles":
+        if args.subtitle_file:
+            if not args.subtitle_file.exists():
+                fail(f"Subtitle file not found: {args.subtitle_file}")
+            return LocalSubtitleProvider(args.subtitle_file, paths.subtitles_dir)
+        if args.youtube_url:
+            return YouTubeSubtitleProvider(args.youtube_url, paths.subtitles_dir, args.subtitle_langs)
+        fail("Transcription mode subtitles requires --subtitle-file or --youtube-url.")
+
+    source_video = resolve_source_video(args, paths)
+    return WhisperXProvider(
+        source_video,
+        WhisperXConfig(
+            model=args.whisper_model,
+            language=args.whisper_language,
+            device=args.whisper_device,
+            compute_type=args.whisper_compute_type,
+            batch_size=args.whisper_batch_size,
+        ),
     )
-    (paths.output_dir / "transcript.txt").write_text(transcript_to_text(cues), encoding="utf-8")
-    print(f"Loaded {len(cues)} subtitle cues from {subtitle_path}")
-    return subtitle_path, cues
+
+
+def load_transcript(args: argparse.Namespace, paths: ProjectPaths) -> TranscriptDocument:
+    provider = make_transcription_provider(args, paths)
+    try:
+        document, reused = load_or_transcribe(
+            provider,
+            paths.output_dir,
+            force=args.force_transcription,
+        )
+    except RuntimeError as exc:
+        fail(str(exc))
+
+    cache_text = "reused cache" if reused else "generated"
+    print(
+        f"Transcript {cache_text}: {len(document.cues)} cues, "
+        f"{len(document.words)} timed words, provider={document.provider}"
+    )
+    return document
 
 
 def make_client(args: argparse.Namespace) -> OllamaClient:
@@ -132,15 +187,16 @@ def make_client(args: argparse.Namespace) -> OllamaClient:
     )
 
 
-def run_subtitles(args: argparse.Namespace) -> None:
+def run_transcribe(args: argparse.Namespace) -> None:
     paths = ProjectPaths.create(args.output_dir)
-    subtitle_path = resolve_subtitles(args, paths)
-    print(f"Subtitle file: {subtitle_path}")
+    load_transcript(args, paths)
+    print(f"Transcript files: {paths.output_dir / 'transcript.json'} and {paths.output_dir / 'transcript.srt'}")
 
 
 def run_analyze(args: argparse.Namespace) -> list[ReelSelection]:
     paths = ProjectPaths.create(args.output_dir)
-    _, cues = load_transcript(args, paths)
+    transcript = load_transcript(args, paths)
+    cues = transcript.cues
     chunks = chunk_transcript(
         cues,
         target_seconds=args.chunk_seconds,
@@ -175,6 +231,8 @@ def run_analyze(args: argparse.Namespace) -> list[ReelSelection]:
     candidates = refine_candidate_boundaries(
         candidates,
         cues,
+        transcript.words,
+        mode=args.boundary_mode,
         min_duration=args.min_duration,
         target_duration=args.target_duration,
         max_duration=args.max_duration,
@@ -242,7 +300,7 @@ def load_selections(path: Path) -> list[ReelSelection]:
 def run_render(args: argparse.Namespace, selections: list[ReelSelection] | None = None) -> None:
     paths = ProjectPaths.create(args.output_dir)
     source_video = resolve_source_video(args, paths)
-    _, cues = load_transcript(args, paths)
+    transcript = load_transcript(args, paths)
 
     if selections is None:
         selected_path = args.selected_reels or (paths.output_dir / "selected_reels.json")
@@ -256,7 +314,7 @@ def run_render(args: argparse.Namespace, selections: list[ReelSelection] | None 
     results = render_reels(
         source_video=source_video,
         selections=selections,
-        all_cues=cues,
+        all_cues=transcript.cues,
         output_dir=paths.output_dir / "reels",
         burn_subtitles=not args.no_burn_subtitles,
         subtitle_font_size=args.subtitle_font_size,
@@ -277,7 +335,7 @@ def run_render(args: argparse.Namespace, selections: list[ReelSelection] | None 
         crf=args.crf,
         preset=args.preset,
     )
-    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    ok_count = sum(1 for result in results if result.get("status") == "ok")
     print(f"Rendered {ok_count}/{len(results)} reels. Report: {paths.output_dir / 'reels' / 'render_report.json'}")
 
 
@@ -292,8 +350,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command == "subtitles":
-        run_subtitles(args)
+    if args.command in {"transcribe", "subtitles"}:
+        run_transcribe(args)
     elif args.command == "analyze":
         run_analyze(args)
     elif args.command == "render":

@@ -40,6 +40,9 @@ def _candidate_from_dict(data: dict[str, Any]) -> ReelCandidate:
         transcript_excerpt=str(data.get("transcript_excerpt") or ""),
         source_chunk=data.get("source_chunk"),
         warnings=list(data.get("warnings") or []),
+        boundary_method=str(data.get("boundary_method")) if data.get("boundary_method") else None,
+        boundary_score=_safe_float(data.get("boundary_score"), 0.0) if data.get("boundary_score") is not None else None,
+        boundary_reasons=list(data.get("boundary_reasons") or []),
     )
 
 
@@ -263,106 +266,6 @@ def generate_candidates(
     return all_candidates
 
 
-def _looks_like_sentence_end(text: str) -> bool:
-    stripped = text.strip()
-    return bool(stripped) and stripped[-1] in ".!?…"
-
-
-def _overlapping_cue_indexes(cues: list[SubtitleCue], start: float, end: float) -> tuple[int, int] | None:
-    indexes = [i for i, cue in enumerate(cues) if cue.end > start and cue.start < end]
-    if indexes:
-        return indexes[0], indexes[-1]
-    if not cues:
-        return None
-    midpoint = (start + end) / 2.0
-    nearest = min(range(len(cues)), key=lambda i: abs(((cues[i].start + cues[i].end) / 2.0) - midpoint))
-    return nearest, nearest
-
-
-def _update_duration_warnings(candidate: ReelCandidate, *, min_duration: int, max_duration: int) -> None:
-    candidate.warnings = [w for w in candidate.warnings if w not in {"too_short", "too_long"}]
-    if candidate.duration < min_duration:
-        candidate.warnings.append("too_short")
-    if candidate.duration > max_duration:
-        candidate.warnings.append("too_long")
-
-
-def refine_candidate_boundaries(
-    candidates: list[ReelCandidate],
-    cues: list[SubtitleCue],
-    *,
-    min_duration: int = 18,
-    target_duration: int = 22,
-    max_duration: int = 60,
-    pre_padding: float = 0.25,
-    post_padding: float = 1.2,
-) -> list[ReelCandidate]:
-    """Expand LLM timecodes to safer subtitle/phrase boundaries.
-
-    Local 4B/8B models often return very short moments (4-12s), because they
-    identify a good fact but not the surrounding spoken phrase. This pass keeps
-    the chosen idea but extends it to nearby subtitle cues so audio is less
-    likely to stop mid-sentence.
-    """
-    if not candidates or not cues:
-        return candidates
-
-    refined: list[ReelCandidate] = []
-    video_end = max(cue.end for cue in cues)
-
-    for candidate in candidates:
-        match = _overlapping_cue_indexes(cues, candidate.start, candidate.end)
-        if match is None:
-            refined.append(candidate)
-            continue
-
-        first, last = match
-        new_start = max(0.0, cues[first].start - pre_padding)
-        new_end = min(video_end, cues[last].end + post_padding)
-
-        # Extend forward until the reel is usable and, if possible, ends on a
-        # sentence-like boundary.
-        while last + 1 < len(cues) and (new_end - new_start) < min_duration:
-            last += 1
-            new_end = min(video_end, cues[last].end + post_padding)
-
-        while last + 1 < len(cues) and (new_end - new_start) < target_duration:
-            if _looks_like_sentence_end(cues[last].text) and (new_end - new_start) >= min_duration:
-                break
-            next_end = min(video_end, cues[last + 1].end + post_padding)
-            if next_end - new_start > max_duration:
-                break
-            last += 1
-            new_end = next_end
-
-        # Add a nearby previous cue if the candidate starts abruptly and the
-        # reel remains in a normal short-video range.
-        if first > 0 and (new_end - new_start) < target_duration:
-            previous = cues[first - 1]
-            if cues[first].start - previous.end <= 1.5:
-                possible_start = max(0.0, previous.start - pre_padding)
-                if new_end - possible_start <= max_duration:
-                    new_start = possible_start
-
-        changed = abs(new_start - candidate.start) > 0.05 or abs(new_end - candidate.end) > 0.05
-        candidate.start = round(new_start, 3)
-        candidate.end = round(new_end, 3)
-        if changed and "boundary_refined" not in candidate.warnings:
-            candidate.warnings.append("boundary_refined")
-        _update_duration_warnings(candidate, min_duration=min_duration, max_duration=max_duration)
-        refined.append(candidate)
-
-    # Remove near-duplicates after expansion.
-    unique: list[ReelCandidate] = []
-    seen: set[tuple[int, int, str]] = set()
-    for candidate in refined:
-        key = (round(candidate.start), round(candidate.end), candidate.title.lower().strip()[:30])
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(candidate)
-    return unique
-
 
 def build_ranking_prompt(candidates: list[ReelCandidate], *, shortlist_count: int, target_count: int) -> str:
     compact = [
@@ -377,6 +280,8 @@ def build_ranking_prompt(candidates: list[ReelCandidate], *, shortlist_count: in
             "reason": c.reason,
             "excerpt": c.transcript_excerpt[:400],
             "warnings": c.warnings,
+            "boundary_method": c.boundary_method,
+            "boundary_score": c.boundary_score,
         }
         for c in candidates
     ]
@@ -430,7 +335,12 @@ def local_rank_candidates(candidates: list[ReelCandidate], *, shortlist_count: i
         duration_penalty = min(1.0, abs(candidate.duration - ideal_duration) * 0.025)
         content_bonus = 0.25 if candidate.hook else 0.0
         content_bonus += 0.15 if candidate.reason else 0.0
-        return (candidate.score - penalty - duration_penalty + content_bonus, -soft_warning_count, -candidate.duration)
+        boundary_bonus = ((candidate.boundary_score or 50.0) - 50.0) / 100.0
+        return (
+            candidate.score - penalty - duration_penalty + content_bonus + boundary_bonus,
+            -soft_warning_count,
+            -candidate.duration,
+        )
 
     return sorted(candidates, key=rank_key, reverse=True)[:shortlist_count]
 
@@ -534,9 +444,14 @@ def interactive_select(shortlist: list[ReelCandidate], *, target_count: int) -> 
         visible_warnings = [w for w in candidate.warnings if w != "boundary_refined"]
         warn = f" [WARN {','.join(visible_warnings)}]" if visible_warnings else ""
         refined = " [expanded]" if "boundary_refined" in candidate.warnings else ""
+        boundary = (
+            f" | cut {candidate.boundary_score:.0f}/100 {candidate.boundary_method}"
+            if candidate.boundary_score is not None
+            else ""
+        )
         cprint(
             f"{idx:02d}. {candidate.id} | {format_hms(candidate.start)}-{format_hms(candidate.end)} "
-            f"| {candidate.duration:.0f}s | score {candidate.score:.1f}{warn}{refined}\n"
+            f"| {candidate.duration:.0f}s | score {candidate.score:.1f}{boundary}{warn}{refined}\n"
             f"    {candidate.title}\n"
             f"    Hook: {candidate.hook}\n"
             f"    Raison: {candidate.reason}\n"

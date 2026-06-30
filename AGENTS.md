@@ -1,61 +1,59 @@
 # Working agreement for coding assistants
 
-This file defines how to continue Reelmaker when the project archive is uploaded to ChatGPT or another coding assistant.
+This file defines how to continue Reelmaker when its archive is uploaded to ChatGPT or another coding assistant.
 
 ## First response after loading the project
 
 1. Read `PROJECT_MANIFEST.md`, `ROADMAP.md`, `docs/ARCHITECTURE.md`, `README.md`, and the tests.
-2. Inspect the relevant code before proposing changes.
-3. Summarize the current state in at most five lines.
-4. Ask only the strategic questions required to choose the next iteration. Usually:
-   - What single user-visible objective should this iteration achieve?
-   - What result will count as accepted?
-   - Are new heavy dependencies acceptable for this iteration?
-   - Must the current YouTube-subtitle workflow remain fully compatible?
-5. Present a short implementation plan and obtain validation of the objective before modifying code, unless the user explicitly says to proceed immediately.
+2. Inspect relevant implementation before proposing changes.
+3. Summarize the state in at most five lines.
+4. Ask only strategic questions required to select one iteration.
+5. Obtain validation of the objective before modifying code, unless the user explicitly says to proceed immediately.
 
-Do not ask again for information already present in the project files or conversation.
+Do not ask again for information already present in project files or conversation.
 
 ## Iteration rules
 
 - Implement one coherent vertical slice at a time.
 - Keep Windows + Git Bash as the primary runtime.
-- Keep processing local by default; no paid/cloud API dependency without explicit approval.
+- Keep processing local by default.
 - Preserve current CLI behaviour unless the validated objective changes it.
-- Add or update tests with every behaviour change.
-- Run `bash scripts/check_project.sh` before delivering an iteration.
-- Run `bash createTarGz.sh` when preparing the complete project archive for the next conversation.
-- Update `PROJECT_MANIFEST.md`, `ROADMAP.md`, and `CHANGELOG.md` when state or decisions change.
-- Give the complete modified module when presenting code, or clearly label any excerpt/partial file.
+- Add or update tests for every behaviour change.
+- Run `bash scripts/check_project.sh` before delivery.
+- Run `bash createTarGz.sh` for the next complete upload archive.
+- Update `PROJECT_MANIFEST.md`, `ROADMAP.md`, and `CHANGELOG.md`.
+- When showing code, provide the complete modified module or mark excerpts clearly.
 
 ## Anti-spaghetti rules
 
-- `cli.py` orchestrates; it must not contain transcription, scoring, vision, or FFmpeg algorithms.
-- External systems are adapters: YouTube/yt-dlp, WhisperX, Ollama, OpenCV, FFmpeg.
-- Core data exchanged between stages uses typed dataclasses and versioned JSON.
-- A feature must not directly reach into another feature's internal files. Use explicit functions/protocols.
-- Do not mix a broad refactor with a feature unless the refactor is a small prerequisite.
-- Prefer dependency injection over global configuration.
-- Keep fallbacks explicit and visible in reports; never silently degrade quality.
+- `cli.py` orchestrates only.
+- External systems remain adapters: yt-dlp, WhisperX, Ollama, OpenCV, FFmpeg.
+- Shared data uses typed dataclasses and versioned JSON.
+- Features communicate through explicit public functions/protocols.
+- Do not mix a broad refactor with a feature unless it is a small prerequisite.
+- Prefer dependency injection over globals.
+- Never silently degrade to a paid/cloud service.
 
 ## Refactoring checkpoints
 
-Propose a dedicated refactoring iteration when one of these becomes true:
+Propose a dedicated refactoring iteration when:
 
 - a module owns more than one major responsibility;
-- a new provider requires copy/paste conditionals;
-- cache/output formats change without a version boundary;
-- tests need extensive mocking of internal details;
-- `analyzer.py` or `renderer.py` must absorb another major subsystem.
+- a provider addition requires copy/paste conditionals;
+- a persisted schema changes without a version boundary;
+- tests require extensive internal mocking;
+- `analyzer.py` or `renderer.py` would absorb another subsystem.
 
-Before running such a refactor, explain the concrete stability benefit and ask the user to validate the objective. Avoid architecture rewrites for their own sake.
+Explain the concrete stability benefit and obtain objective validation before a dedicated refactor.
 
 ## Current strategic direction
 
-The next major capability is direct MP4 input with local transcription. The preferred design is a `TranscriptionProvider` boundary with:
+Version 0.4.0 has pause-aware spoken boundaries. The next step is real-video stabilization before adding another subsystem.
 
-- existing subtitle-file/YouTube provider;
-- new WhisperX provider;
-- optional faster-whisper fallback later.
+Preferred sequence:
 
-WhisperX should be introduced behind an optional dependency group and tested first with Python 3.11 on Windows/NVIDIA. Do not place WhisperX imports in the base startup path.
+- request one representative MP4 or its generated `transcript.json` when useful;
+- compare `--boundary-mode off` and `auto` on at least 10 cuts;
+- tune pause thresholds only from observed failures;
+- do not add pitch/prosody unless pause + punctuation remains insufficient;
+- before scene-aware work, validate a small architecture extraction around `renderer.py`.

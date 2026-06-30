@@ -45,7 +45,7 @@ def test_local_rank_penalizes_warnings():
 
     assert ranked[0] == good
 
-from reelmaker.analyzer import refine_candidate_boundaries
+from reelmaker.boundary import refine_candidate_boundaries
 from reelmaker.models import SubtitleCue
 
 
