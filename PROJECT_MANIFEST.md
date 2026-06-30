@@ -41,9 +41,9 @@ Dependencies:
 - yt-dlp Python package
 - FFmpeg installed externally
 - Ollama installed externally
-- Optional: `opencv-python` only for `--crop-mode face`
+- Optional: `opencv-python` and `numpy` for `--crop-mode smart`, `face`, or `motion`
 
-No heavy framework is used. The MVP intentionally avoids Typer, Pydantic, MoviePy, Whisper, or UI dependencies. OpenCV is optional and not required for the default workflow.
+No heavy framework is used. The MVP intentionally avoids Typer, Pydantic, MoviePy, Whisper, or UI dependencies. OpenCV/numpy are optional; without them, smart crop falls back to centered crop.
 
 ## Recommended Ollama model
 
@@ -143,8 +143,12 @@ Rendering is done by FFmpeg:
 
 Vertical crop:
 
-- Default: centered crop.
-- Optional: `--crop-mode face`, using OpenCV Haar frontal-face detection to compute one static horizontal crop per reel. This is a pragmatic helper, not full person tracking.
+- Default: `--crop-mode smart`.
+- `smart` uses OpenCV if installed: frontal faces first, then motion, then center fallback.
+- `face` forces face detection only.
+- `motion` uses frame differences to follow the visually active area.
+- Multiple faces are grouped when possible to avoid cutting one person out.
+- This is still a static crop per reel, not true speaker detection or dynamic person tracking.
 
 ## Current CLI commands
 
@@ -168,7 +172,7 @@ Other commands:
 
 ## Known limitations
 
-- `--crop-mode face` only detects frontal faces and computes a static crop; it is not full person tracking.
+- `--crop-mode smart` improves framing but does not truly identify who is speaking. It computes one static crop per reel; no dynamic speaker alternation yet.
 - Subtitle styling is practical but not a branded motion-graphics system.
 - Hooks are text suggestions; no separate animated title card yet.
 - The local LLM can still produce imperfect JSON; parsing includes a loose extractor but failures are logged.
@@ -198,6 +202,15 @@ Prefer:
 - Manual override at every important step.
 - Conservative AI prompts.
 - Practical output over complex architecture.
+
+## Notes version 0.2.1
+
+- Default crop mode is now `smart`: face detection, then motion detection, then center fallback.
+- Added optional dependency group `vision` and `requirements-vision.txt`.
+- Added `--subtitle-correction off|basic|ollama`; `basic` is default, `ollama` corrects selected reel captions with context and cache.
+- End card is now intentionally short by default: `Suite sur YouTube` + `Voir commentaire`.
+- Added `--end-card-style short|title|full|none` and `--end-card-comment-text`.
+- Subtitle defaults are more compact: font 60, bottom margin 150, max 2 lines, wrap width 23.
 
 ## Notes version 0.2.0
 

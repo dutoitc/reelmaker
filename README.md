@@ -7,7 +7,7 @@ Generate vertical reels from a long video using:
 - **Ollama** for local AI candidate selection;
 - **FFmpeg** for vertical cuts, ASS burned subtitles, and optional YouTube end cards.
 
-Version **0.2.0** focuses on making the MVP usable in real runs: safer resume/cache, longer reel boundaries, bottom captions, Windows/Git Bash console safety, and optional basic face-centered crop.
+Version **0.2.1** focuses on output quality: concise end cards, safer bottom captions, optional subtitle correction, and smarter vertical cropping using faces first, then motion.
 
 ## Current workflow
 
@@ -39,13 +39,15 @@ Recommended:
 ollama pull qwen3:4b
 ```
 
-Optional, only if you want `--crop-mode face`:
+Optional, for smarter vertical crop with `--crop-mode smart`, `face`, or `motion`:
 
 ```bash
-pip install opencv-python
+pip install -e ".[vision]"
+# or
+pip install -r requirements-vision.txt
 ```
 
-OpenCV face mode is deliberately basic: it detects **frontal faces**, not full people, and computes one static horizontal crop for the whole reel. If it fails, Reelmaker falls back to centered crop.
+The smart crop is lightweight: it detects frontal faces when possible, otherwise it estimates the active visual area from motion. It does **not** truly identify the active speaker from audio. If detection fails, Reelmaker falls back to centered crop.
 
 ## Install
 
@@ -84,25 +86,30 @@ python -m reelmaker all \
   --min-duration 18 \
   --target-duration 22 \
   --max-duration 60 \
-  --subtitle-font-size 64 \
-  --subtitle-margin-v 220 \
-  --end-card-seconds 2.0 \
+  --subtitle-font-size 60 \
+  --subtitle-margin-v 150 \
+  --subtitle-wrap-width 23 \
+  --subtitle-correction basic \
+  --crop-mode smart \
+  --end-card-seconds 3.0 \
+  --end-card-style short \
+  --youtube-cta "Suite sur YouTube" \
+  --end-card-comment-text "Voir commentaire" \
   --episode-title "Titre de l'episode YouTube" \
   --output-dir "output/my-video"
 ```
 
-## What changed in 0.2.0
+## What changed in 0.2.1
 
 | Area | Change |
 |---|---|
-| Selection | If the shortlist has 10 candidates and target is 10, Reelmaker selects them automatically. No more “choose 10 among 10”. |
-| Encoding | Candidate display is ASCII-safe by default on Windows to avoid mojibake in Git Bash. JSON files remain UTF-8. Set `REELMAKER_UNICODE_CONSOLE=1` to display accents. |
-| Duration | Default minimum reel duration is now 18s, target duration 22s. Short LLM candidates are expanded to nearby subtitle boundaries. |
-| Audio cuts | End times are extended with post-padding and following cues to reduce cut-off phrases. |
-| Subtitles | Burned subtitles now use ASS, bottom-aligned, larger, with outline. Default margin: `--subtitle-margin-v 220`. |
-| Subtitle artefacts | Long overlapping YouTube subtitle cues are filtered to avoid one caption staying on screen while another changes. |
-| End card | Optional final card: `--end-card-seconds 2.0 --episode-title "..."`. |
-| Vertical crop | Default remains centered. Optional basic face crop: `--crop-mode face` with `opencv-python`. |
+| End card | Shorter default card: `Suite sur YouTube` + `Voir commentaire`. Use `--end-card-style title` if you also want the episode title. |
+| Subtitles | Defaults are lower and more compact: font 60, margin 150, max 2 lines, narrower wrapping. |
+| Subtitle correction | New `--subtitle-correction basic|ollama|off`. `basic` is conservative and fast. `ollama` corrects only selected reel subtitles and caches the result. |
+| Vertical crop | New default `--crop-mode smart`: faces first, then motion, then center. `face` and `motion` are also available. |
+| Person visibility | Multiple faces are grouped when possible so the 9:16 crop tries to keep both people visible. |
+| Selection | If the shortlist has 10 candidates and target is 10, Reelmaker selects them automatically. |
+| Duration/audio | Short LLM candidates are expanded to nearby subtitle boundaries and post-padding reduces cut-off phrases. |
 
 ## Resume / cache
 
@@ -155,7 +162,12 @@ python -m reelmaker render \
   --source-video "/c/Users/cedric/Videos/source.mp4" \
   --subtitle-file "output/my-video/subtitles/VIDEO_ID.fr.srt" \
   --selected-reels "output/my-video/selected_reels.json" \
-  --end-card-seconds 2.0 \
+  --crop-mode smart \
+  --subtitle-correction basic \
+  --end-card-seconds 3.0 \
+  --end-card-style short \
+  --youtube-cta "Suite sur YouTube" \
+  --end-card-comment-text "Voir commentaire" \
   --episode-title "Titre de l'episode YouTube" \
   --output-dir "output/my-video"
 ```
@@ -201,10 +213,13 @@ output/my-video/
 | `--target-duration` | 22 | preferred short reel duration |
 | `--max-duration` | 60 | longest reel |
 | `--post-padding` | 1.2 | seconds kept after last subtitle cue |
-| `--subtitle-font-size` | 64 | burned caption size |
-| `--subtitle-margin-v` | 220 | bottom caption margin; larger = higher |
-| `--crop-mode` | `center` | use `face` for optional OpenCV face crop |
-| `--end-card-seconds` | 0 | 0 disables final YouTube card |
+| `--subtitle-font-size` | 60 | burned caption size |
+| `--subtitle-margin-v` | 150 | bottom caption margin; larger = higher |
+| `--subtitle-correction` | `basic` | use `ollama` for contextual cleanup |
+| `--subtitle-max-lines` | 2 | keeps subtitles readable |
+| `--end-card-style` | `short` | `title` shows the episode title too |
+| `--crop-mode` | `smart` | faces first, then motion, then center |
+| `--end-card-seconds` | 0 | 0 disables final YouTube card; 3.0 recommended |
 | `--crf` | 20 | lower = better/larger MP4 |
 
 ## YouTube subtitle robustness

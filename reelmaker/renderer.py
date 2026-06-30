@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from .models import ReelSelection, SubtitleCue
+from .ollama_client import OllamaClient
+from .subtitle_corrector import maybe_correct_cues
 from .subtitles import cues_for_segment, write_srt
 from .timecode import format_hms
 from .utils import run_command, write_json
-from .vision import CropHint, detect_face_crop_hint
+from .vision import CropHint, detect_smart_crop_hint
 
 
 def _ass_time(seconds: float) -> str:
@@ -31,13 +33,13 @@ def _ass_escape(text: str) -> str:
     return text
 
 
-def _wrap_ass(text: str, *, width: int = 28, max_lines: int = 2) -> str:
+def _wrap_ass(text: str, *, width: int = 24, max_lines: int = 2) -> str:
     wrapped = textwrap.wrap(_ass_escape(text), width=width, break_long_words=False, replace_whitespace=False)
     if not wrapped:
         return ""
     if len(wrapped) > max_lines:
         wrapped = wrapped[:max_lines]
-        wrapped[-1] = wrapped[-1].rstrip(" .,") + "..."
+        wrapped[-1] = wrapped[-1].rstrip(" .,;:") + "..."
     return r"\N".join(wrapped)
 
 
@@ -45,8 +47,10 @@ def write_ass_subtitles(
     path: Path,
     cues: list[SubtitleCue],
     *,
-    font_size: int = 64,
-    margin_v: int = 220,
+    font_size: int = 60,
+    margin_v: int = 150,
+    wrap_width: int = 23,
+    max_lines: int = 2,
     play_res_x: int = 1080,
     play_res_y: int = 1920,
 ) -> None:
@@ -59,14 +63,14 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Reel,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H90000000,1,0,0,0,100,100,0,0,1,4,0,2,80,80,{margin_v},1
+Style: Reel,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,1,2,80,80,{margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = [header.rstrip()]
     for cue in cues:
-        text = _wrap_ass(cue.text)
+        text = _wrap_ass(cue.text, width=wrap_width, max_lines=max_lines)
         if not text:
             continue
         lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Reel,,0,0,0,,{text}")
@@ -80,13 +84,41 @@ def write_end_card_ass(
     episode_title: str,
     duration: float,
     youtube_url: str = "",
+    style: str = "short",
+    comment_text: str = "Voir commentaire",
 ) -> None:
-    parts = [cta.strip() or "Video complete sur YouTube"]
-    if episode_title.strip():
-        parts.append(episode_title.strip())
-    if youtube_url.strip():
-        parts.append("Lien dans la description / sur la chaine")
-    text = r"\N".join(_wrap_ass(part, width=24, max_lines=2) for part in parts if part.strip())
+    """Write a concise end-card.
+
+    Long end cards are unreadable on Reels/TikTok. The default keeps only a
+    clear CTA plus one small hint. The episode title is optional and smaller.
+    """
+    cta = (cta or "Suite sur YouTube").strip()
+    episode_title = episode_title.strip()
+    comment_text = (comment_text or "Voir commentaire").strip()
+
+    events: list[tuple[str, float, int, str]] = []
+    if style == "none":
+        events = []
+    elif style == "title" and episode_title:
+        events = [
+            (cta, 0.0, 76, "CardMain"),
+            (episode_title, 0.65, 48, "CardTitle"),
+            (comment_text, 1.35, 48, "CardSmall"),
+        ]
+    elif style == "full":
+        events = [
+            (cta, 0.0, 72, "CardMain"),
+            (episode_title, 0.65, 46, "CardTitle"),
+            (comment_text, 1.35, 48, "CardSmall"),
+        ]
+        if youtube_url.strip():
+            events.append(("Lien dans la description", 2.0, 40, "CardSmall"))
+    else:
+        events = [
+            (cta, 0.0, 82, "CardMain"),
+            (comment_text, 0.75, 54, "CardSmall"),
+        ]
+
     header = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -96,12 +128,24 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Card,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,1,0,0,0,100,100,0,0,1,4,0,5,80,80,80,1
+Style: CardMain,Arial,82,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,1,5,80,80,80,1
+Style: CardTitle,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,0,0,0,0,100,100,0,0,1,4,1,5,90,90,80,1
+Style: CardSmall,Arial,54,&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,4,1,5,90,90,80,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    path.write_text(header + f"Dialogue: 0,0:00:00.00,{_ass_time(duration)},Card,,0,0,0,,{text}\n", encoding="utf-8")
+    lines = [header.rstrip()]
+    for text, start, _font, style_name in events:
+        if not text.strip():
+            continue
+        width = 18 if style_name == "CardMain" else 26
+        max_lines = 1 if style_name != "CardTitle" else 2
+        lines.append(
+            f"Dialogue: 0,{_ass_time(start)},{_ass_time(duration)},"
+            f"{style_name},,0,0,0,,{_wrap_ass(text, width=width, max_lines=max_lines)}"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _scale_crop_filter(crop_hint: CropHint | None) -> str:
@@ -128,9 +172,19 @@ def _render_end_card(
     fps: int,
     crf: int,
     preset: str,
+    style: str,
+    comment_text: str,
 ) -> bool:
     ass_path = reel_dir / "end_card.ass"
-    write_end_card_ass(ass_path, cta=cta, episode_title=episode_title, duration=duration, youtube_url=youtube_url)
+    write_end_card_ass(
+        ass_path,
+        cta=cta,
+        episode_title=episode_title,
+        duration=duration,
+        youtube_url=youtube_url,
+        style=style,
+        comment_text=comment_text,
+    )
     cmd = [
         "ffmpeg",
         "-y",
@@ -169,19 +223,7 @@ def _render_end_card(
 def _concat_videos(*, reel_dir: Path, parts: list[Path], output_video: Path) -> bool:
     concat_path = reel_dir / "concat.txt"
     concat_path.write_text("\n".join(f"file '{part.name}'" for part in parts) + "\n", encoding="utf-8")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(concat_path.name),
-        "-c",
-        "copy",
-        str(output_video.name),
-    ]
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_path.name), "-c", "copy", str(output_video.name)]
     return run_command(cmd, cwd=reel_dir, check=False).returncode == 0
 
 
@@ -192,13 +234,20 @@ def render_reel(
     all_cues: list[SubtitleCue],
     output_dir: Path,
     burn_subtitles: bool = True,
-    subtitle_font_size: int = 64,
-    subtitle_margin_v: int = 220,
-    crop_mode: str = "center",
+    subtitle_font_size: int = 60,
+    subtitle_margin_v: int = 150,
+    subtitle_wrap_width: int = 23,
+    subtitle_max_lines: int = 2,
+    subtitle_correction: str = "basic",
+    subtitle_correction_client: OllamaClient | None = None,
+    force_subtitle_correction: bool = False,
+    crop_mode: str = "smart",
     fps: int = 25,
     end_card_seconds: float = 0.0,
+    end_card_style: str = "short",
+    end_card_comment_text: str = "Voir commentaire",
     episode_title: str = "",
-    youtube_cta: str = "Video complete sur YouTube",
+    youtube_cta: str = "Suite sur YouTube",
     youtube_url: str = "",
     crf: int = 20,
     preset: str = "medium",
@@ -207,22 +256,40 @@ def render_reel(
     reel_dir.mkdir(parents=True, exist_ok=True)
 
     local_cues = cues_for_segment(all_cues, selection.start, selection.end)
+    corrected_cues = maybe_correct_cues(
+        local_cues,
+        mode=subtitle_correction,
+        selection=selection,
+        episode_title=episode_title,
+        client=subtitle_correction_client,
+        cache_path=reel_dir / "subtitles_corrected.json",
+        force=force_subtitle_correction,
+    )
     srt_path = reel_dir / "subtitles.srt"
     ass_path = reel_dir / "subtitles.ass"
-    write_srt(srt_path, local_cues)
-    write_ass_subtitles(ass_path, local_cues, font_size=subtitle_font_size, margin_v=subtitle_margin_v)
+    write_srt(srt_path, corrected_cues)
+    write_ass_subtitles(
+        ass_path,
+        corrected_cues,
+        font_size=subtitle_font_size,
+        margin_v=subtitle_margin_v,
+        wrap_width=subtitle_wrap_width,
+        max_lines=subtitle_max_lines,
+    )
 
     metadata_path = reel_dir / "metadata.json"
     metadata = selection.to_dict()
     metadata["episode_title"] = episode_title
     metadata["youtube_url"] = youtube_url
     metadata["end_card_seconds"] = end_card_seconds
+    metadata["end_card_style"] = end_card_style
+    metadata["subtitle_correction"] = subtitle_correction
     write_json(metadata_path, metadata)
 
     caption_path = reel_dir / "caption.txt"
     caption_parts = [selection.hook, selection.title]
     if episode_title:
-        caption_parts.append(f"Video complete sur YouTube : {episode_title}")
+        caption_parts.append(f"Suite sur YouTube : {episode_title}")
     if youtube_url:
         caption_parts.append(youtube_url)
     caption_parts.append("#reels #tiktok #shorts")
@@ -234,8 +301,8 @@ def render_reel(
     duration = max(0.1, selection.end - selection.start)
 
     crop_hint = CropHint(None, "center")
-    if crop_mode == "face":
-        crop_hint = detect_face_crop_hint(source_video=source_video, start=selection.start, duration=duration)
+    if crop_mode in {"face", "motion", "smart"}:
+        crop_hint = detect_smart_crop_hint(source_video=source_video, start=selection.start, duration=duration, mode=crop_mode)
 
     def build_cmd(with_subtitles: bool) -> list[str]:
         return [
@@ -292,6 +359,8 @@ def render_reel(
         "caption": str(caption_path),
         "crop_mode": crop_mode,
         "crop_hint": crop_hint.reason,
+        "crop_confidence": crop_hint.confidence,
+        "subtitle_correction": subtitle_correction,
         "status": "ok",
         "warnings": [],
     }
@@ -318,6 +387,8 @@ def render_reel(
             fps=fps,
             crf=crf,
             preset=preset,
+            style=end_card_style,
+            comment_text=end_card_comment_text,
         )
         if ok_card:
             ok_concat = _concat_videos(reel_dir=reel_dir, parts=[content_video, end_card_video], output_video=output_video)
@@ -340,13 +411,20 @@ def render_reels(
     all_cues: list[SubtitleCue],
     output_dir: Path,
     burn_subtitles: bool = True,
-    subtitle_font_size: int = 64,
-    subtitle_margin_v: int = 220,
-    crop_mode: str = "center",
+    subtitle_font_size: int = 60,
+    subtitle_margin_v: int = 150,
+    subtitle_wrap_width: int = 23,
+    subtitle_max_lines: int = 2,
+    subtitle_correction: str = "basic",
+    subtitle_correction_client: OllamaClient | None = None,
+    force_subtitle_correction: bool = False,
+    crop_mode: str = "smart",
     fps: int = 25,
     end_card_seconds: float = 0.0,
+    end_card_style: str = "short",
+    end_card_comment_text: str = "Voir commentaire",
     episode_title: str = "",
-    youtube_cta: str = "Video complete sur YouTube",
+    youtube_cta: str = "Suite sur YouTube",
     youtube_url: str = "",
     crf: int = 20,
     preset: str = "medium",
@@ -363,9 +441,16 @@ def render_reels(
                 burn_subtitles=burn_subtitles,
                 subtitle_font_size=subtitle_font_size,
                 subtitle_margin_v=subtitle_margin_v,
+                subtitle_wrap_width=subtitle_wrap_width,
+                subtitle_max_lines=subtitle_max_lines,
+                subtitle_correction=subtitle_correction,
+                subtitle_correction_client=subtitle_correction_client,
+                force_subtitle_correction=force_subtitle_correction,
                 crop_mode=crop_mode,
                 fps=fps,
                 end_card_seconds=end_card_seconds,
+                end_card_style=end_card_style,
+                end_card_comment_text=end_card_comment_text,
                 episode_title=episode_title,
                 youtube_cta=youtube_cta,
                 youtube_url=youtube_url,

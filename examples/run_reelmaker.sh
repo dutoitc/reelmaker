@@ -34,9 +34,15 @@ python -m reelmaker all \
   --min-duration 18 \
   --target-duration 22 \
   --max-duration 60 \
-  --subtitle-font-size 64 \
-  --subtitle-margin-v 220 \
-  --crop-mode center \
-  --end-card-seconds 2.0 \
+  --subtitle-font-size 60 \
+  --subtitle-margin-v 150 \
+  --subtitle-wrap-width 23 \
+  --subtitle-max-lines 2 \
+  --subtitle-correction basic \
+  --crop-mode smart \
+  --end-card-seconds 3.0 \
+  --end-card-style short \
+  --youtube-cta "Suite sur YouTube" \
+  --end-card-comment-text "Voir commentaire" \
   --episode-title "$EPISODE_TITLE" \
   --output-dir "$OUTPUT_DIR"
