@@ -16,11 +16,11 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", flags=re.DOTALL | re.IGNOR
 @dataclass(frozen=True)
 class OllamaClient:
     base_url: str = "http://localhost:11434"
-    model: str = "qwen3:8b"
+    model: str = "qwen3:4b"
     temperature: float = 0.2
-    num_ctx: int = 32768
+    num_ctx: int = 16384
     timeout_seconds: int = 600
-    num_predict: int = 2048
+    num_predict: int = 1024
     stream: bool = True
 
     def generate(self, prompt: str) -> str:

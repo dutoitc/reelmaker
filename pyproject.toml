@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reelmaker"
+version = "0.2.2"
+description = "Generate vertical reels from a local video using YouTube subtitles and Ollama."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Cédric Dutoit" }]
+dependencies = [
+  "yt-dlp>=2025.1.0"
+]
+
+[project.scripts]
+reelmaker = "reelmaker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["reelmaker*"]
+
+[project.optional-dependencies]
+vision = ["opencv-python>=4.9.0", "numpy>=1.26"]
+dev = ["pytest>=8,<9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

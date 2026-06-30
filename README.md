@@ -7,7 +7,7 @@ Generate vertical reels from a long video using:
 - **Ollama** for local AI candidate selection;
 - **FFmpeg** for vertical cuts, ASS burned subtitles, and optional YouTube end cards.
 
-Version **0.2.1** focuses on output quality: concise end cards, safer bottom captions, optional subtitle correction, and smarter vertical cropping using faces first, then motion.
+Version **0.2.2** keeps the output-quality work from 0.2.1 and adds the cleanup, tests, documentation, and packaging needed for a public experimental repository.
 
 ## Current workflow
 
@@ -73,7 +73,7 @@ Or directly:
 ```bash
 python -m reelmaker all \
   --youtube-url "https://www.youtube.com/watch?v=VIDEO_ID" \
-  --source-video "/c/Users/cedric/Videos/source.mp4" \
+  --source-video "/c/Users/YourName/Videos/source.mp4" \
   --ollama-url "http://localhost:11434" \
   --model "qwen3:4b" \
   --subtitle-langs "fr.*,fr" \
@@ -99,10 +99,11 @@ python -m reelmaker all \
   --output-dir "output/my-video"
 ```
 
-## What changed in 0.2.1
+## What changed in 0.2.2
 
 | Area | Change |
 |---|---|
+| Repository | Added clean Git rules, CI tests, project checks, ChatGPT packaging, roadmap, and architecture guardrails. |
 | End card | Shorter default card: `Suite sur YouTube` + `Voir commentaire`. Use `--end-card-style title` if you also want the episode title. |
 | Subtitles | Defaults are lower and more compact: font 60, margin 150, max 2 lines, narrower wrapping. |
 | Subtitle correction | New `--subtitle-correction basic|ollama|off`. `basic` is conservative and fast. `ollama` corrects only selected reel subtitles and caches the result. |
@@ -159,7 +160,7 @@ python -m reelmaker analyze \
 
 ```bash
 python -m reelmaker render \
-  --source-video "/c/Users/cedric/Videos/source.mp4" \
+  --source-video "/c/Users/YourName/Videos/source.mp4" \
   --subtitle-file "output/my-video/subtitles/VIDEO_ID.fr.srt" \
   --selected-reels "output/my-video/selected_reels.json" \
   --crop-mode smart \
@@ -237,3 +238,24 @@ Avoid adding `en.*` unless you need English fallback, because each extra languag
 - Local source video is preferred: better quality, less download time, no YouTube recompression.
 - YouTube subtitles are used only as transcript and timing source.
 - Shorts/Reels/TikTok should usually be 15–30s. This tool defaults around 18–22s for MVP testing.
+
+## Development checks
+
+```bash
+pip install -e ".[dev]"
+bash scripts/check_project.sh
+```
+
+GitHub Actions runs the base unit tests on Python 3.10, 3.12, and 3.13. FFmpeg, Ollama, yt-dlp network access, and GPU workflows remain manual integration checks.
+
+## Create a clean archive for ChatGPT
+
+```bash
+bash scripts/package_project.sh
+```
+
+The generated archive excludes virtual environments, output videos, caches, bytecode, and local media. On the next conversation, upload it and say **“on fait la suite”**. The assistant should follow `AGENTS.md`, ask the strategic questions needed for one iteration, and validate the objective before changing code.
+
+## Next milestone
+
+Direct MP4 input with local WhisperX transcription is planned behind a `TranscriptionProvider` boundary. The current YouTube/SRT workflow remains the compatibility path. See `ROADMAP.md` and `docs/ARCHITECTURE.md`.

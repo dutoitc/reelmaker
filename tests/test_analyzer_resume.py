@@ -64,3 +64,24 @@ def test_refine_candidate_boundaries_expands_short_candidate():
     assert refined[0].duration >= 18
     assert "too_short" not in refined[0].warnings
     assert "boundary_refined" in refined[0].warnings
+
+
+def test_generate_candidates_renumbers_mixed_cached_chunks(tmp_path: Path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    for chunk_index, start in [(1, 10), (2, 70)]:
+        (logs_dir / f"ollama_chunk_{chunk_index:03d}.candidates.json").write_text(
+            '[{"id":"C001","start":%s,"end":%s,"title":"Titre","hook":"Hook",'
+            '"reason":"Raison","score":8,"transcript_excerpt":"Texte","warnings":[]}]'
+            % (start, start + 30),
+            encoding="utf-8",
+        )
+
+    chunks = [
+        TranscriptChunk(index=1, start=0, end=60, text="one", cue_indexes=[1]),
+        TranscriptChunk(index=2, start=60, end=120, text="two", cue_indexes=[2]),
+    ]
+
+    candidates = generate_candidates(chunks, FailingClient(), logs_dir, resume=True)  # type: ignore[arg-type]
+
+    assert [candidate.id for candidate in candidates] == ["C001", "C002"]

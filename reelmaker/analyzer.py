@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .console import cprint, console_text
+from .console import cprint
 from .models import ReelCandidate, ReelSelection, SubtitleCue, TranscriptChunk
 from .ollama_client import OllamaClient, parse_json_loose
 from .timecode import format_hms, parse_timecode
@@ -256,6 +256,10 @@ def generate_candidates(
             (logs_dir / f"ollama_chunk_{chunk.index:03d}.error.txt").write_text(str(exc), encoding="utf-8")
             continue
 
+    # Cached chunks can contain IDs produced under an older partial run.
+    # Reassign them deterministically after merging to prevent duplicate IDs.
+    for index, candidate in enumerate(all_candidates, start=1):
+        candidate.id = f"C{index:03d}"
     return all_candidates
 
 

@@ -15,3 +15,12 @@ def test_read_streaming_response_concatenates_fragments():
 def test_parse_json_loose_ignores_think_and_fences():
     text = '<think>draft</think>```json\n{"selected": []}\n```'
     assert parse_json_loose(text) == {"selected": []}
+
+
+def test_ollama_client_defaults_match_cli_strategy():
+    from reelmaker.ollama_client import OllamaClient
+
+    client = OllamaClient()
+    assert client.model == "qwen3:4b"
+    assert client.num_ctx == 16384
+    assert client.num_predict == 1024

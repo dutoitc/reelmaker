@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Adapt these values.
 YOUTUBE_URL="https://www.youtube.com/watch?v=VIDEO_ID"
-SOURCE_VIDEO="/c/Users/cedric/Videos/source.mp4"
+SOURCE_VIDEO="/c/Users/YourName/Videos/source.mp4"
 OUTPUT_DIR="output/my-video"
 OLLAMA_URL="http://localhost:11434"
 MODEL="qwen3:4b"

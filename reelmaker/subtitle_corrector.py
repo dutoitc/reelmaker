@@ -50,7 +50,6 @@ def correct_text_basic(text: str) -> str:
     text = text.replace(" ,", ",").replace(" .", ".")
     text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
     text = re.sub(r"\s+(['’])\s+", r"\1", text)
-    text = text.replace("oeuf", "oeuf")
     text = _MULTI_PUNCT_RE.sub(lambda m: m.group(1), text)
     for wrong, right in _COMMON_FIXES.items():
         text = _preserve_case_replace(text, wrong, right)
@@ -127,9 +126,16 @@ def correct_cues_with_ollama(
         raise ValueError("Subtitle correction response does not contain a subtitles list")
 
     corrected = correct_cues_basic(cues)
-    by_index = {int(item.get("index")): correct_text_basic(str(item.get("text") or "")) for item in items if isinstance(item, dict) and item.get("index") is not None}
+    by_index = {
+        int(item.get("index")): correct_text_basic(str(item.get("text") or ""))
+        for item in items
+        if isinstance(item, dict) and item.get("index") is not None
+    }
     if by_index:
-        corrected = [SubtitleCue(c.index, c.start, c.end, by_index.get(c.index, c.text)) for c in cues]
+        corrected = [
+            SubtitleCue(c.index, c.start, c.end, by_index.get(c.index, c.text))
+            for c in corrected
+        ]
     write_json(cache_path, [{"index": c.index, "text": c.text} for c in corrected])
     return corrected
 
