@@ -10,6 +10,7 @@ class CropHint:
     crop_x: int | None = None
     reason: str = "center"
     confidence: float = 0.0
+    layout: str = "crop"  # crop | fit-blur
 
 
 def _scaled_width(source_width: int, source_height: int, *, target_width: int, target_height: int) -> int:
@@ -172,9 +173,11 @@ def detect_smart_crop_hint(
             target_width=target_width,
             target_height=target_height,
         )
-        if motion_hint.crop_x is not None:
+        if motion_hint.crop_x is not None and (mode == "motion" or motion_hint.confidence >= 0.55):
             return motion_hint
 
+    if mode == "smart" and source_width / source_height > target_width / target_height:
+        return CropHint(None, "wide_visual_preserved", 0.5, "fit-blur")
     return CropHint(None, "center_fallback", 0.0)
 
 
@@ -193,46 +196,65 @@ def _detect_face_hint_from_frames(
         return CropHint(None, "haar_missing", 0.0)
 
     weighted_centers: list[float] = []
-    all_face_lefts: list[float] = []
-    all_face_rights: list[float] = []
+    frame_face_sets: list[list[tuple[int, int, int, int]]] = []
     frames_with_faces = 0
-    multi_face_frames = 0
 
     for frame in frames:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = detector.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=4, minSize=(36, 36))
         if len(faces) == 0:
             continue
-        frames_with_faces += 1
-        if len(faces) >= 2:
-            multi_face_frames += 1
-
-        # Keep significant faces, not tiny false positives.
         faces_sorted = sorted(faces, key=lambda rect: rect[2] * rect[3], reverse=True)[:3]
         largest_area = max(w * h for x, y, w, h in faces_sorted)
-        relevant = [(x, y, w, h) for x, y, w, h in faces_sorted if (w * h) >= largest_area * 0.35]
-        for x, y, w, h in relevant:
+        relevant = [(int(x), int(y), int(w), int(h)) for x, y, w, h in faces_sorted if (w * h) >= largest_area * 0.35]
+        if not relevant:
+            continue
+        frame_face_sets.append(relevant)
+        frames_with_faces += 1
+        for x, _y, w, h in relevant:
             center = float(x + w / 2.0)
-            # Weight larger faces more strongly, approximated by duplicates.
             weight = max(1, int(round((w * h) / max(1, largest_area) * 3)))
             weighted_centers.extend([center] * weight)
-            all_face_lefts.append(float(x))
-            all_face_rights.append(float(x + w))
 
     if not weighted_centers:
         return CropHint(None, "no_face_detected", 0.0)
 
     confidence = min(1.0, frames_with_faces / max(1, len(frames)))
-    if multi_face_frames > 0 and all_face_lefts and all_face_rights:
+    multi_sets = [faces for faces in frame_face_sets if len(faces) >= 2]
+    if multi_sets:
+        representative = max(multi_sets, key=lambda faces: sum(w * h for _x, _y, w, h in faces))
+        representative = sorted(representative, key=lambda rect: rect[2] * rect[3], reverse=True)
+        largest_area = representative[0][2] * representative[0][3]
+        second_area = representative[1][2] * representative[1][3]
+        crop_source_width = source_height * (target_width / target_height)
+        left = min(x for x, _y, _w, _h in representative)
+        right = max(x + w for x, _y, w, _h in representative)
+        span = right - left
+
+        # If one face clearly dominates, isolate it. Otherwise preserve both
+        # people with a blurred background instead of cutting both faces.
+        if largest_area >= second_area * 1.8:
+            x, _y, w, _h = representative[0]
+            crop_x = _crop_x_from_center(
+                x + w / 2.0,
+                source_width=source_width,
+                source_height=source_height,
+                target_width=target_width,
+                target_height=target_height,
+            )
+            return CropHint(crop_x, "dominant_face", confidence, "crop")
+        if span > crop_source_width * 0.9:
+            return CropHint(None, "wide_two_person_shot", confidence, "fit-blur")
+
         crop_x = _crop_x_for_span(
-            min(all_face_lefts),
-            max(all_face_rights),
+            left,
+            right,
             source_width=source_width,
             source_height=source_height,
             target_width=target_width,
             target_height=target_height,
         )
-        return CropHint(crop_x, f"faces_group_{frames_with_faces}_samples", confidence)
+        return CropHint(crop_x, f"faces_group_{frames_with_faces}_samples", confidence, "crop")
 
     center_x = float(median(weighted_centers))
     crop_x = _crop_x_from_center(
@@ -242,7 +264,7 @@ def _detect_face_hint_from_frames(
         target_width=target_width,
         target_height=target_height,
     )
-    return CropHint(crop_x, f"face_{frames_with_faces}_samples", confidence)
+    return CropHint(crop_x, f"face_{frames_with_faces}_samples", confidence, "crop")
 
 
 def _detect_motion_hint_from_frames(
@@ -297,4 +319,4 @@ def _detect_motion_hint_from_frames(
         target_height=target_height,
     )
     confidence = min(1.0, len(centers) / max(1, len(frames) - 1))
-    return CropHint(crop_x, f"motion_{len(centers)}_samples", confidence)
+    return CropHint(crop_x, f"motion_{len(centers)}_samples", confidence, "crop")

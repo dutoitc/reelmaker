@@ -72,6 +72,32 @@ class TranscriptChunk:
     cue_indexes: list[int]
 
 
+@dataclass(frozen=True)
+class ReelSegment:
+    start: float
+    end: float
+
+    @property
+    def duration(self) -> float:
+        return max(0.0, self.end - self.start)
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "start": round(self.start, 3),
+            "end": round(self.end, 3),
+            "duration": round(self.duration, 3),
+        }
+
+
+def normalize_segments(start: float, end: float, segments: list[ReelSegment] | None) -> list[ReelSegment]:
+    valid = [segment for segment in (segments or []) if segment.end > segment.start]
+    if valid:
+        return valid
+    if end > start:
+        return [ReelSegment(start, end)]
+    return []
+
+
 @dataclass
 class ReelCandidate:
     id: str
@@ -87,14 +113,25 @@ class ReelCandidate:
     boundary_method: str | None = None
     boundary_score: float | None = None
     boundary_reasons: list[str] = field(default_factory=list)
+    segments: list[ReelSegment] = field(default_factory=list)
+
+    @property
+    def source_segments(self) -> list[ReelSegment]:
+        return normalize_segments(self.start, self.end, self.segments)
 
     @property
     def duration(self) -> float:
-        return max(0.0, self.end - self.start)
+        return sum(segment.duration for segment in self.source_segments)
+
+    @property
+    def is_composite(self) -> bool:
+        return len(self.source_segments) > 1
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data["segments"] = [segment.to_dict() for segment in self.source_segments]
         data["duration"] = self.duration
+        data["is_composite"] = self.is_composite
         return data
 
 
@@ -109,14 +146,25 @@ class ReelSelection:
     hook: str
     reason: str
     transcript_excerpt: str
+    segments: list[ReelSegment] = field(default_factory=list)
+
+    @property
+    def source_segments(self) -> list[ReelSegment]:
+        return normalize_segments(self.start, self.end, self.segments)
 
     @property
     def duration(self) -> float:
-        return max(0.0, self.end - self.start)
+        return sum(segment.duration for segment in self.source_segments)
+
+    @property
+    def is_composite(self) -> bool:
+        return len(self.source_segments) > 1
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data["segments"] = [segment.to_dict() for segment in self.source_segments]
         data["duration"] = self.duration
+        data["is_composite"] = self.is_composite
         return data
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,12 +39,38 @@ def write_json(path: Path, data: Any) -> None:
 
 
 def ensure_tool(name: str) -> None:
-    try:
-        run_command([name, "-version"], check=False)
-    except FileNotFoundError as exc:
-        raise RuntimeError(f"Tool not found in PATH: {name}") from exc
+    if shutil.which(name) is None:
+        raise RuntimeError(f"Tool not found in PATH: {name}")
 
 
 def fail(message: str) -> None:
     print(f"ERROR: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def probe_media_duration(path: Path) -> float:
+    """Return media duration in seconds using ffprobe, or 0 when unavailable."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if result.returncode == 0:
+            return max(0.0, float((result.stdout or "0").strip()))
+    except Exception:
+        pass
+    return 0.0

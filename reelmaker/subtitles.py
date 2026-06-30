@@ -232,3 +232,76 @@ def cues_for_segment(cues: list[SubtitleCue], start: float, end: float) -> list[
         if local_end > local_start:
             selected.append(SubtitleCue(index=len(selected) + 1, start=local_start, end=local_end, text=cue.text))
     return normalize_segment_cues(selected, segment_duration=max(0.0, end - start))
+
+
+def split_cues_for_display(
+    cues: list[SubtitleCue],
+    *,
+    max_chars: int,
+    min_chunk_duration: float = 0.45,
+) -> list[SubtitleCue]:
+    """Split long captions instead of truncating them on screen.
+
+    Timing is distributed proportionally to the number of characters. This
+    preserves every spoken word while keeping each burned caption readable.
+    """
+    if max_chars <= 0:
+        return cues
+
+    result: list[SubtitleCue] = []
+    for cue in cues:
+        text = clean_subtitle_text(cue.text)
+        if len(text) <= max_chars:
+            result.append(SubtitleCue(len(result) + 1, cue.start, cue.end, text))
+            continue
+
+        words = text.split()
+        chunks: list[str] = []
+        current: list[str] = []
+        for word in words:
+            proposed = " ".join([*current, word])
+            if current and len(proposed) > max_chars:
+                chunks.append(" ".join(current))
+                current = [word]
+            else:
+                current.append(word)
+        if current:
+            chunks.append(" ".join(current))
+
+        duration = max(0.0, cue.end - cue.start)
+        if len(chunks) <= 1 or duration < min_chunk_duration * len(chunks):
+            result.append(SubtitleCue(len(result) + 1, cue.start, cue.end, text))
+            continue
+
+        total_weight = sum(max(1, len(chunk)) for chunk in chunks)
+        cursor = cue.start
+        for chunk_index, chunk in enumerate(chunks):
+            if chunk_index == len(chunks) - 1:
+                chunk_end = cue.end
+            else:
+                share = duration * (max(1, len(chunk)) / total_weight)
+                chunk_end = min(cue.end, cursor + max(min_chunk_duration, share))
+            if chunk_end > cursor:
+                result.append(SubtitleCue(len(result) + 1, cursor, chunk_end, chunk))
+            cursor = chunk_end
+
+    return result
+
+
+def cues_for_segments(cues: list[SubtitleCue], segments: list[tuple[float, float]]) -> list[SubtitleCue]:
+    """Map several source ranges onto one continuous output timeline."""
+    output: list[SubtitleCue] = []
+    output_offset = 0.0
+    for start, end in segments:
+        local = cues_for_segment(cues, start, end)
+        for cue in local:
+            output.append(
+                SubtitleCue(
+                    index=len(output) + 1,
+                    start=cue.start + output_offset,
+                    end=cue.end + output_offset,
+                    text=cue.text,
+                )
+            )
+        output_offset += max(0.0, end - start)
+    return normalize_segment_cues(output, segment_duration=output_offset)

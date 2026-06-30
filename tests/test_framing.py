@@ -70,3 +70,25 @@ def test_scene_smart_falls_back_to_full_interval_without_scene_list():
 
     assert len(plan) == 1
     assert (plan[0].start, plan[0].end) == (3.0, 7.0)
+
+
+def test_scene_smart_does_not_merge_crop_and_fit_layouts():
+    scenes = [Scene(1, 0.0, 5.0), Scene(2, 5.0, 10.0)]
+
+    def fake_crop(**kwargs):
+        if kwargs["start"] < 5.0:
+            return CropHint(100, "speaker", 0.9, "crop")
+        return CropHint(None, "wide_two_person_shot", 0.9, "fit-blur")
+
+    plan = build_framing_plan(
+        source_video=Path("video.mp4"),
+        start=0.0,
+        end=10.0,
+        crop_mode="scene-smart",
+        scenes=scenes,
+        crop_detector=fake_crop,
+    )
+
+    assert len(plan) == 2
+    assert plan[0].crop_hint.layout == "crop"
+    assert plan[1].crop_hint.layout == "fit-blur"

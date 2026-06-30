@@ -26,6 +26,7 @@ class FramingSegment:
             "crop_x": self.crop_hint.crop_x,
             "reason": self.crop_hint.reason,
             "confidence": round(self.crop_hint.confidence, 3),
+            "layout": self.crop_hint.layout,
         }
 
 
@@ -47,7 +48,7 @@ def build_framing_plan(
         return []
 
     if crop_mode == "center":
-        return [FramingSegment(start, end, CropHint(None, "center", 1.0))]
+        return [FramingSegment(start, end, CropHint(None, "center", 1.0, "crop"))]
 
     if crop_mode in {"face", "motion", "smart"}:
         hint = crop_detector(
@@ -83,6 +84,8 @@ def build_framing_plan(
 def _can_merge(left: FramingSegment, right: FramingSegment, *, tolerance: int) -> bool:
     if abs(left.end - right.start) > 0.01:
         return False
+    if left.crop_hint.layout != right.crop_hint.layout:
+        return False
     left_x = left.crop_hint.crop_x
     right_x = right.crop_hint.crop_x
     if left_x is None or right_x is None:
@@ -99,4 +102,4 @@ def _merge_hints(left: FramingSegment, right: FramingSegment) -> CropHint:
         total = max(0.001, left.duration + right.duration)
         crop_x = int(round((left_x * left.duration + right_x * right.duration) / total))
     confidence = min(left.crop_hint.confidence, right.crop_hint.confidence)
-    return CropHint(crop_x, "merged_adjacent_scenes", confidence)
+    return CropHint(crop_x, "merged_adjacent_scenes", confidence, left.crop_hint.layout)

@@ -4,14 +4,14 @@ import re
 import shutil
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .framing import FramingSegment, build_framing_plan
 from .models import ReelSelection, SubtitleCue
 from .ollama_client import OllamaClient
 from .scene_analysis import Scene
 from .subtitle_corrector import maybe_correct_cues
-from .subtitles import cues_for_segment, write_srt
+from .subtitles import cues_for_segments, split_cues_for_display, write_srt
 from .timecode import format_hms
 from .utils import run_command, write_json
 from .vision import CropHint
@@ -152,6 +152,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def _scale_crop_filter(crop_hint: CropHint | None) -> str:
+    if crop_hint and crop_hint.layout == "fit-blur":
+        return (
+            "split=2[bg][fg];"
+            "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,gblur=sigma=28[bg2];"
+            "[fg]scale=1080:1920:force_original_aspect_ratio=decrease[fg2];"
+            "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,setsar=1"
+        )
     if crop_hint and crop_hint.crop_x is not None:
         return f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:{crop_hint.crop_x}:0,setsar=1"
     return "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1"
@@ -334,6 +342,7 @@ def _render_scene_aware_content(
     fps: int,
     crf: int,
     preset: str,
+    allow_subtitle_fallback: bool = False,
 ) -> tuple[bool, list[str], str]:
     warnings: list[str] = []
     segments_dir = reel_dir / "_scene_segments"
@@ -370,11 +379,16 @@ def _render_scene_aware_content(
             preset=preset,
         )
         if not ok:
-            warnings.append("subtitle_burn_failed_retry_without_subtitles")
+            warnings.append("subtitle_burn_failed")
+            if not allow_subtitle_fallback:
+                shutil.rmtree(segments_dir, ignore_errors=True)
+                return False, warnings, log
+            warnings.append("subtitle_fallback_without_burn")
             shutil.copyfile(assembled, content_video)
             if content_video.exists():
                 shutil.rmtree(segments_dir, ignore_errors=True)
                 return True, warnings, log
+            shutil.rmtree(segments_dir, ignore_errors=True)
             return False, warnings, log
     else:
         shutil.copyfile(assembled, content_video)
@@ -408,11 +422,13 @@ def render_reel(
     youtube_url: str = "",
     crf: int = 20,
     preset: str = "medium",
+    allow_subtitle_fallback: bool = False,
 ) -> dict[str, Any]:
     reel_dir = output_dir / selection.id
     reel_dir.mkdir(parents=True, exist_ok=True)
 
-    local_cues = cues_for_segment(all_cues, selection.start, selection.end)
+    source_segments = selection.source_segments
+    local_cues = cues_for_segments(all_cues, [(segment.start, segment.end) for segment in source_segments])
     corrected_cues = maybe_correct_cues(
         local_cues,
         mode=subtitle_correction,
@@ -422,12 +438,16 @@ def render_reel(
         cache_path=reel_dir / "subtitles_corrected.json",
         force=force_subtitle_correction,
     )
+    display_cues = split_cues_for_display(
+        corrected_cues,
+        max_chars=max(12, subtitle_wrap_width * subtitle_max_lines),
+    )
     srt_path = reel_dir / "subtitles.srt"
     ass_path = reel_dir / "subtitles.ass"
-    write_srt(srt_path, corrected_cues)
+    write_srt(srt_path, display_cues)
     write_ass_subtitles(
         ass_path,
-        corrected_cues,
+        display_cues,
         font_size=subtitle_font_size,
         margin_v=subtitle_margin_v,
         wrap_width=subtitle_wrap_width,
@@ -446,17 +466,27 @@ def render_reel(
     output_video = reel_dir / f"{selection.id}.mp4"
     content_video = reel_dir / (f"{selection.id}_content.mp4" if end_card_seconds > 0 else f"{selection.id}.mp4")
     end_card_video = reel_dir / f"{selection.id}_end_card.mp4"
-    duration = max(0.1, selection.end - selection.start)
+    duration = max(0.1, selection.duration)
 
-    framing_plan = build_framing_plan(
-        source_video=source_video,
-        start=selection.start,
-        end=selection.end,
-        crop_mode=crop_mode,
-        scenes=scenes,
-    )
-    if not framing_plan:
-        framing_plan = [FramingSegment(selection.start, selection.end, CropHint(None, "center_fallback", 0.0))]
+    framing_plan: list[FramingSegment] = []
+    for source_segment in source_segments:
+        framing_plan.extend(
+            build_framing_plan(
+                source_video=source_video,
+                start=source_segment.start,
+                end=source_segment.end,
+                crop_mode=crop_mode,
+                scenes=scenes,
+            )
+        )
+    if not framing_plan and source_segments:
+        framing_plan = [
+            FramingSegment(
+                source_segments[0].start,
+                source_segments[0].end,
+                CropHint(None, "center_fallback", 0.0),
+            )
+        ]
 
     metadata_path = reel_dir / "metadata.json"
     metadata = selection.to_dict()
@@ -466,6 +496,7 @@ def render_reel(
     metadata["end_card_style"] = end_card_style
     metadata["subtitle_correction"] = subtitle_correction
     metadata["crop_mode"] = crop_mode
+    metadata["source_segments"] = [segment.to_dict() for segment in source_segments]
     metadata["framing_plan"] = [segment.to_dict() for segment in framing_plan]
     write_json(metadata_path, metadata)
 
@@ -477,6 +508,8 @@ def render_reel(
         "start": format_hms(selection.start),
         "end": format_hms(selection.end),
         "duration": round(duration, 3),
+        "source_segments": [segment.to_dict() for segment in source_segments],
+        "subtitle_cues": len(display_cues),
         "video": str(output_video),
         "content_video": str(content_video),
         "subtitles": str(srt_path),
@@ -495,6 +528,11 @@ def render_reel(
         "warnings": [],
     }
 
+    if burn_subtitles and not display_cues:
+        result["status"] = "error"
+        result["warnings"].append("no_subtitles_for_selected_segments")
+        return result
+
     if len(framing_plan) > 1:
         ok, warnings, log = _render_scene_aware_content(
             source_video=source_video,
@@ -505,6 +543,7 @@ def render_reel(
             fps=fps,
             crf=crf,
             preset=preset,
+            allow_subtitle_fallback=allow_subtitle_fallback,
         )
         result["warnings"].extend(warnings)
         if not ok:
@@ -536,8 +575,10 @@ def render_reel(
 
         completed = run_command(build_cmd(burn_subtitles), cwd=reel_dir, check=False)
         if completed.returncode != 0 and burn_subtitles:
-            result["warnings"].append("subtitle_burn_failed_retry_without_subtitles")
-            completed = run_command(build_cmd(False), cwd=reel_dir, check=False)
+            result["warnings"].append("subtitle_burn_failed")
+            if allow_subtitle_fallback:
+                result["warnings"].append("subtitle_fallback_without_burn")
+                completed = run_command(build_cmd(False), cwd=reel_dir, check=False)
 
         if completed.returncode != 0:
             result["status"] = "error"
@@ -570,6 +611,9 @@ def render_reel(
             if content_video != output_video:
                 shutil.copyfile(content_video, output_video)
 
+    if not output_video.exists() or output_video.stat().st_size == 0:
+        result["status"] = "error"
+        result["warnings"].append("output_video_missing")
     return result
 
 
@@ -598,6 +642,8 @@ def render_reels(
     youtube_url: str = "",
     crf: int = 20,
     preset: str = "medium",
+    allow_subtitle_fallback: bool = False,
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[dict[str, Any]]:
     results = []
     for selection in selections:
@@ -627,7 +673,10 @@ def render_reels(
                 youtube_url=youtube_url,
                 crf=crf,
                 preset=preset,
+                allow_subtitle_fallback=allow_subtitle_fallback,
             )
         )
+        if progress_callback:
+            progress_callback(len(results), len(selections), f"Rendu {selection.id}")
     write_json(output_dir / "render_report.json", results)
     return results

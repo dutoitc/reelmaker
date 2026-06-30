@@ -1,85 +1,109 @@
 # Reelmaker roadmap
 
-## Release 0.3.0 — direct MP4 transcription
+## Releases delivered
 
-Status: implemented; real Windows/GPU validation pending.
+### 0.3.0 — direct MP4 transcription
 
-- SRT, YouTube and WhisperX providers;
-- direct MP4 transcription;
+- SRT, YouTube, and WhisperX providers;
+- direct MP4 input;
 - word timestamps and fingerprinted transcript cache.
 
-## Release 0.4.0 — safer spoken boundaries
-
-Status: implemented; real-video comparison pending.
+### 0.4.0 — safer spoken boundaries
 
 - pause-aware beginnings/endings;
 - punctuation and cue fallback;
 - `--boundary-mode auto|words|cues|off`.
 
-## Release 0.5.0 — scene-aware framing
+### 0.5.0 — scene-aware framing
 
-Status: implemented, unit-tested, and synthetic integration-tested.
+- PySceneDetect adapter and `scenes.json`;
+- isolated `framing.py` decisions;
+- `--crop-mode scene-smart`;
+- per-shot FFmpeg rendering and final subtitle pass.
 
-Delivered:
+### 0.5.1 — reliable Ollama JSON
 
-1. PySceneDetect adapter and fingerprinted `scenes.json`.
-2. `scenes` command for isolated detection tests.
-3. Framing decisions extracted from rendering.
-4. New `--crop-mode scene-smart`.
-5. One smart crop per detected shot.
-6. Merge of nearly identical adjacent crops.
-7. Multi-shot FFmpeg rendering and final subtitle pass.
-8. Framing plan exposed in reel metadata.
+- explicit `think=false`;
+- JSON Schema outputs;
+- deterministic non-streaming structured requests;
+- actionable parsing diagnostics.
 
-Acceptance to validate on Xplore footage:
+### 0.6.0 — usable desktop workflow and quality safeguards
 
-- compare `smart` and `scene-smart` on at least three reels;
-- no subject should be lost after a shot change;
-- crop jumps are acceptable only on real cuts;
-- detection should not split camera motion into excessive false scenes.
+- optional PySide6 Windows GUI;
+- progress JSON events and local multi-run ETA history;
+- hybrid two/three-passage editorial montage;
+- composite segment/subtitle rendering;
+- stronger natural endings;
+- fit-blur preservation for two-person/wide shots;
+- contextual subtitle correction by default;
+- complete subtitle display and explicit render failure rules;
+- dependency preflight and zero-video failure;
+- local `run_*` scripts ignored and excluded from archives.
 
-Useful tuning:
+## Validation gate for 0.6.x
+
+Before another large feature, test the same real reportages through:
 
 ```bash
---scene-threshold 27
---scene-min-frames 15
---force-scene-detection
+--composition-mode contiguous
+--composition-mode hybrid
+--crop-mode smart
+--crop-mode scene-smart
+--subtitle-correction ollama
 ```
 
-Lower threshold = more detected cuts. Increase it when pans or flashes create false cuts.
+Record observations for:
 
-## Release 0.5.1 — reliable Ollama JSON
+- first/last spoken words;
+- grammatical/substantive subtitle accuracy;
+- two-person interviews;
+- landscapes, monuments, slides, and full-screen wide visuals;
+- editorial coherence of recomposed reels;
+- missing/failed render outputs;
+- ETA accuracy after two or three runs.
 
-Status: implemented after the first real WhisperX/Xplore run.
+## Candidate iteration 0.6.1 — observed defect stabilization
 
-- explicit `think=false` for Qwen 3 API requests;
-- JSON Schema structured output for candidates, ranking and subtitle correction;
-- structured calls use non-streaming mode and temperature 0;
-- clear diagnostics for empty, truncated and rejected responses;
-- existing transcript cache remains reusable after a failed candidate run.
+Only after real-video feedback:
 
-## Iteration 4 — relevant beautiful views / B-roll
+- tune incomplete-ending thresholds;
+- tune fit-blur vs crop decisions;
+- improve subtitle correction cache/errors;
+- improve GUI diagnostics and progress granularity;
+- fingerprint candidate caches more completely if stale results appear.
 
-Refactoring checkpoint: keep frame extraction and scoring outside `renderer.py`.
+## Candidate iteration 0.7 — active speaker and person tracking
 
-- extract representative frames per shot;
-- score blur, exposure and stability;
-- add semantic relevance between transcript and shots;
-- propose B-roll, but require human validation before automatic insertion.
-
-## Iteration 5 — music
-
-- local licensed music library with tags;
-- intro/outro selection and automatic ducking;
-- optional beat-aware cuts;
-- disabled by default until rights and loudness rules are configured.
-
-## Stabilization options
-
-Can be selected before Iteration 4 if real tests expose issues:
+Refactoring checkpoint: do not add this directly to `vision.py` if it becomes a full tracking subsystem.
 
 - stronger face/person detector;
-- scene threshold presets for interview/reportage/drone;
-- fingerprint Ollama analysis caches;
-- reduce scene-aware rendering time;
-- improve WhisperX phone-caption regrouping.
+- track people across a shot;
+- use audio/speaker timing where possible;
+- crop the active speaker only when confidence is high;
+- preserve both people otherwise.
+
+## Candidate iteration 0.8 — global editorial montage
+
+- summarize topics across all transcript chunks;
+- propose complementary passages across the complete programme;
+- require coherent hook/explanation/conclusion;
+- reject repetitions and factual discontinuities;
+- expose source segments clearly for review.
+
+## Candidate iteration 0.9 — beautiful views and B-roll
+
+- representative frames per scene;
+- blur/exposure/stability scores;
+- semantic relevance between transcript and shots;
+- human validation before automatic insertion.
+
+## Candidate iteration 1.0 — music
+
+Refactor renderer responsibilities first.
+
+- local licensed music library with tags;
+- automatic ducking under speech;
+- optional beat-aware cuts;
+- loudness and rights rules;
+- disabled by default until configured.

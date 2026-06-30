@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -91,23 +93,29 @@ def correct_cues_basic(cues: list[SubtitleCue]) -> list[SubtitleCue]:
 def _build_ollama_prompt(*, selection: ReelSelection, cues: list[SubtitleCue], episode_title: str) -> str:
     items = [{"index": c.index, "text": c.text} for c in cues]
     return f"""/no_think
-Tu corriges des sous-titres français extraits automatiquement de YouTube.
+Tu corriges des sous-titres francais issus d'une reconnaissance vocale automatique.
 
-Objectif: corriger uniquement les fautes probables de transcription, grammaire légère et ponctuation.
-
-Contexte vidéo:
+Contexte video:
 - Episode: {episode_title or 'non precise'}
-- Extrait: {selection.title}
+- Reel: {selection.title}
 - Accroche: {selection.hook}
+- Sujet probable: {selection.reason}
 
-Règles strictes:
+Objectif:
+- corriger les erreurs probables de reconnaissance vocale;
+- restaurer accents, apostrophes, accords et ponctuation;
+- conserver le vocabulaire technique et les noms propres lorsqu'ils sont plausibles;
+- rendre chaque sous-titre grammaticalement correct sans reecrire le propos.
+
+Regles strictes:
 - Ne change PAS le sens.
-- N'ajoute PAS de nouvelles informations.
-- Ne transforme PAS le style oral en texte littéraire.
-- Garde les phrases courtes, lisibles sur smartphone.
-- Conserve le même nombre d'items et les mêmes index.
-- Si le texte est déjà correct, garde-le presque identique.
-- Réponds uniquement avec un JSON valide.
+- N'ajoute PAS d'information absente.
+- Ne resume PAS et ne supprime PAS de mots utiles.
+- Conserve le style oral et les hesitations utiles.
+- Garde exactement le meme nombre d'items et les memes index.
+- Utilise les items voisins comme contexte pour corriger une phrase coupee entre plusieurs sous-titres.
+- Si un mot reste incertain, conserve la transcription originale.
+- Reponds uniquement avec un objet JSON valide.
 
 Format attendu:
 {{
@@ -117,8 +125,20 @@ Format attendu:
 }}
 
 Sous-titres JSON:
-{items}
+{json.dumps(items, ensure_ascii=False)}
 """
+
+
+def _correction_fingerprint(cues: list[SubtitleCue], *, selection: ReelSelection, episode_title: str, model: str) -> str:
+    payload = {
+        "cues": [{"index": c.index, "start": c.start, "end": c.end, "text": c.text} for c in cues],
+        "selection": selection.to_dict(),
+        "episode_title": episode_title,
+        "model": model,
+        "schema": 2,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def correct_cues_with_ollama(
@@ -132,11 +152,22 @@ def correct_cues_with_ollama(
 ) -> list[SubtitleCue]:
     if not cues:
         return []
+    fingerprint = _correction_fingerprint(
+        cues,
+        selection=selection,
+        episode_title=episode_title,
+        model=str(getattr(client, "model", "unknown")),
+    )
     if cache_path.exists() and not force:
         try:
             raw = read_json(cache_path)
-            if isinstance(raw, list) and len(raw) == len(cues):
-                by_index = {int(item.get("index")): str(item.get("text") or "") for item in raw if isinstance(item, dict)}
+            if isinstance(raw, dict) and raw.get("fingerprint") == fingerprint:
+                items = raw.get("subtitles") or []
+                by_index = {
+                    int(item.get("index")): str(item.get("text") or "")
+                    for item in items
+                    if isinstance(item, dict)
+                }
                 if by_index:
                     return [SubtitleCue(c.index, c.start, c.end, by_index.get(c.index, c.text)) for c in cues]
         except Exception:
@@ -165,7 +196,14 @@ def correct_cues_with_ollama(
             SubtitleCue(c.index, c.start, c.end, by_index.get(c.index, c.text))
             for c in corrected
         ]
-    write_json(cache_path, [{"index": c.index, "text": c.text} for c in corrected])
+    write_json(
+        cache_path,
+        {
+            "fingerprint": fingerprint,
+            "model": str(getattr(client, "model", "unknown")),
+            "subtitles": [{"index": c.index, "text": c.text} for c in corrected],
+        },
+    )
     return corrected
 
 

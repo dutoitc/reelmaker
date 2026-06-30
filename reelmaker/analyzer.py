@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .console import cprint
-from .models import ReelCandidate, ReelSelection, SubtitleCue, TranscriptChunk
+from .models import ReelCandidate, ReelSegment, ReelSelection, SubtitleCue, TranscriptChunk
 from .ollama_client import OllamaClient, parse_json_loose
 from .timecode import format_hms, parse_timecode
 from .utils import read_json, write_json
@@ -13,7 +13,32 @@ from .utils import read_json, write_json
 
 
 
-def candidate_response_schema(*, max_candidates: int) -> dict[str, Any]:
+def candidate_response_schema(*, max_candidates: int, allow_montage: bool = True) -> dict[str, Any]:
+    properties: dict[str, Any] = {
+        "start_time": {"type": "string"},
+        "end_time": {"type": "string"},
+        "title": {"type": "string"},
+        "hook": {"type": "string"},
+        "reason": {"type": "string"},
+        "score": {"type": "number", "minimum": 0, "maximum": 10},
+        "transcript_excerpt": {"type": "string"},
+    }
+    if allow_montage:
+        properties["segments"] = {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"},
+                },
+                "required": ["start_time", "end_time"],
+                "additionalProperties": False,
+            },
+        }
+
     return {
         "type": "object",
         "properties": {
@@ -23,15 +48,7 @@ def candidate_response_schema(*, max_candidates: int) -> dict[str, Any]:
                 "maxItems": max(1, max_candidates),
                 "items": {
                     "type": "object",
-                    "properties": {
-                        "start_time": {"type": "string"},
-                        "end_time": {"type": "string"},
-                        "title": {"type": "string"},
-                        "hook": {"type": "string"},
-                        "reason": {"type": "string"},
-                        "score": {"type": "number", "minimum": 0, "maximum": 10},
-                        "transcript_excerpt": {"type": "string"},
-                    },
+                    "properties": properties,
                     "required": [
                         "start_time",
                         "end_time",
@@ -94,6 +111,14 @@ def _safe_score(value: Any) -> float:
 
 
 def _candidate_from_dict(data: dict[str, Any]) -> ReelCandidate:
+    segments: list[ReelSegment] = []
+    for item in data.get("segments") or []:
+        if not isinstance(item, dict):
+            continue
+        start = _safe_float(item.get("start"), 0.0)
+        end = _safe_float(item.get("end"), start)
+        if end > start:
+            segments.append(ReelSegment(start, end))
     return ReelCandidate(
         id=str(data.get("id") or "C000"),
         start=_safe_float(data.get("start"), 0.0),
@@ -108,57 +133,92 @@ def _candidate_from_dict(data: dict[str, Any]) -> ReelCandidate:
         boundary_method=str(data.get("boundary_method")) if data.get("boundary_method") else None,
         boundary_score=_safe_float(data.get("boundary_score"), 0.0) if data.get("boundary_score") is not None else None,
         boundary_reasons=list(data.get("boundary_reasons") or []),
+        segments=segments,
     )
 
 
-def build_chunk_prompt(chunk: TranscriptChunk, *, candidates_per_chunk: int, min_duration: int, max_duration: int) -> str:
+def build_chunk_prompt(
+    chunk: TranscriptChunk,
+    *,
+    candidates_per_chunk: int,
+    min_duration: int,
+    max_duration: int,
+    composition_mode: str = "hybrid",
+) -> str:
+    montage_rules = """
+- Tu peux recomposer un reel avec 2 ou 3 passages NON CONTIGUS parlant du meme sujet.
+- Pour un montage, renseigne `segments` dans l'ordre narratif, avec les timecodes exacts.
+- La somme des segments doit respecter la duree cible.
+- Un montage doit apporter une vraie progression: accroche, explication, conclusion.
+- Propose au moins un montage si le transcript contient des passages complementaires.
+""" if composition_mode == "hybrid" else "- Propose uniquement un passage continu; n\'utilise pas `segments`.\n"
     return f"""/no_think
-Tu es un assistant de montage vidéo court pour Instagram Reels, TikTok et YouTube Shorts.
+Tu es un monteur editorial specialise en Instagram Reels, TikTok et YouTube Shorts.
 
-Objectif: trouver des extraits verticaux courts issus d'une vidéo longue.
+Objectif: creer des reels autonomes et interessants a partir d'une video longue.
 
-Règles strictes:
+Regles strictes:
 - Utilise UNIQUEMENT le transcript fourni.
 - N'invente aucun fait, lieu, nom, date ou conclusion.
 - Les timecodes doivent venir du transcript.
-- Un extrait doit être compréhensible sans contexte externe.
-- Un extrait doit commencer par une phrase qui donne envie d'écouter.
-- Durée cible: {min_duration} à {max_duration} secondes, idéalement 18 à 25 secondes.
-- Évite les extraits qui commencent au milieu d'une idée.
-- Évite les fins brutalement coupées.
-- Ne propose pas deux extraits quasi identiques.
-- Réponds uniquement avec UN objet JSON valide.
-- Ne mets aucun texte avant ou après le JSON.
-- Ne mets pas de markdown.
-- Limite les champs texte à des phrases courtes.
+- Le reel doit etre comprehensible sans contexte externe.
+- Les 3 premieres secondes doivent contenir une information, une surprise ou une question forte.
+- Le reel doit se terminer sur une phrase complete ou une conclusion naturelle.
+- Duree totale cible: {min_duration} a {max_duration} secondes, idealement 20 a 35 secondes.
+- Evite les extraits qui ne sont qu'un morceau arbitraire de la video.
+- Evite les introductions vagues, repetitions, salutations et transitions techniques.
+- Ne propose pas deux reels quasi identiques.
+{montage_rules}- Reponds uniquement avec UN objet JSON valide, sans markdown ni commentaire.
+- Limite les champs texte a des phrases courtes.
 
-Critères de score /10:
-- Compréhensible seul: 30%
-- Accroche des 3 premières secondes: 25%
-- Valeur informative/émotionnelle: 20%
-- Rythme oral: 15%
-- Potentiel commentaire/partage: 10%
+Criteres de score /10:
+- Valeur concrete, surprenante ou emotionnelle: 30%
+- Accroche des 3 premieres secondes: 25%
+- Autonomie et progression narrative: 25%
+- Fin naturelle: 15%
+- Potentiel commentaire/partage: 5%
 
-Format JSON attendu:
+Format JSON attendu pour un passage continu:
 {{
   "candidates": [
     {{
       "start_time": "00:00:00,000",
-      "end_time": "00:00:45,000",
+      "end_time": "00:00:25,000",
       "title": "Titre court",
       "hook": "Phrase d'accroche courte",
-      "reason": "Pourquoi cet extrait peut marcher",
+      "reason": "Pourquoi ce reel peut marcher",
       "score": 8.0,
-      "transcript_excerpt": "Texte exact ou quasi exact du passage"
+      "transcript_excerpt": "Texte exact ou quasi exact"
     }}
   ]
 }}
 
-Nombre maximum de candidats à proposer pour ce bloc: {candidates_per_chunk}
+Pour un montage, ajoute par exemple:
+"segments": [
+  {{"start_time": "00:00:10,000", "end_time": "00:00:18,000"}},
+  {{"start_time": "00:02:20,000", "end_time": "00:02:34,000"}}
+]
 
-Transcript bloc {chunk.index}, de {format_hms(chunk.start)} à {format_hms(chunk.end)}:
+Nombre maximum de candidats pour ce bloc: {candidates_per_chunk}
+
+Transcript bloc {chunk.index}, de {format_hms(chunk.start)} a {format_hms(chunk.end)}:
 {chunk.text}
 """
+
+
+def _parse_segments(item: dict[str, Any], *, chunk: TranscriptChunk) -> list[ReelSegment]:
+    segments: list[ReelSegment] = []
+    for raw_segment in item.get("segments") or []:
+        if not isinstance(raw_segment, dict):
+            continue
+        start = _safe_float(raw_segment.get("start_time"), chunk.start)
+        end = _safe_float(raw_segment.get("end_time"), start)
+        if end <= start:
+            continue
+        if start < chunk.start - 2 or end > chunk.end + 2:
+            continue
+        segments.append(ReelSegment(start, end))
+    return segments[:3]
 
 
 def _candidates_from_payload(
@@ -168,6 +228,7 @@ def _candidates_from_payload(
     start_index: int,
     min_duration: int,
     max_duration: int,
+    composition_mode: str = "hybrid",
 ) -> list[ReelCandidate]:
     items = payload.get("candidates", []) if isinstance(payload, dict) else payload
     if not isinstance(items, list):
@@ -177,18 +238,24 @@ def _candidates_from_payload(
     for item in items:
         if not isinstance(item, dict):
             continue
+        segments = _parse_segments(item, chunk=chunk) if composition_mode == "hybrid" else []
         start = _safe_float(item.get("start_time"), default=chunk.start)
         end = _safe_float(item.get("end_time"), default=start)
+        if segments:
+            start = segments[0].start
+            end = segments[-1].end
         warnings: list[str] = []
         if end <= start:
             continue
         if start < chunk.start - 2 or end > chunk.end + 2:
             warnings.append("outside_source_chunk")
-        duration = end - start
+        duration = sum(segment.duration for segment in segments) if segments else end - start
         if duration < min_duration:
             warnings.append("too_short")
         if duration > max_duration:
             warnings.append("too_long")
+        if len(segments) > 1:
+            warnings.append("composite_montage")
 
         candidates.append(
             ReelCandidate(
@@ -199,9 +266,10 @@ def _candidates_from_payload(
                 hook=str(item.get("hook", "")).strip()[:220],
                 reason=str(item.get("reason", "")).strip()[:500],
                 score=_safe_score(item.get("score")),
-                transcript_excerpt=str(item.get("transcript_excerpt", "")).strip()[:1200],
+                transcript_excerpt=str(item.get("transcript_excerpt", "")).strip()[:1600],
                 source_chunk=chunk.index,
                 warnings=warnings,
+                segments=segments,
             )
         )
     return candidates
@@ -227,6 +295,7 @@ def _try_parse_existing_raw(
     start_index: int,
     min_duration: int,
     max_duration: int,
+    composition_mode: str = "hybrid",
 ) -> list[ReelCandidate] | None:
     if not raw_path.exists():
         return None
@@ -239,6 +308,7 @@ def _try_parse_existing_raw(
             start_index=start_index,
             min_duration=min_duration,
             max_duration=max_duration,
+            composition_mode=composition_mode,
         )
         if candidates:
             write_json(candidates_path, [c.to_dict() for c in candidates])
@@ -258,12 +328,19 @@ def generate_candidates(
     max_duration: int = 75,
     resume: bool = True,
     force_ollama: bool = False,
+    composition_mode: str = "contiguous",
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[ReelCandidate]:
     all_candidates: list[ReelCandidate] = []
 
     for pos, chunk in enumerate(chunks, start=1):
-        raw_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.txt"
-        candidates_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.candidates.json"
+        if composition_mode == "contiguous":
+            raw_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.txt"
+            candidates_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.candidates.json"
+        else:
+            cache_suffix = composition_mode.replace("-", "_")
+            raw_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.{cache_suffix}.txt"
+            candidates_path = logs_dir / f"ollama_chunk_{chunk.index:03d}.{cache_suffix}.candidates.json"
 
         if resume and not force_ollama:
             cached = _load_cached_candidates(candidates_path)
@@ -273,6 +350,8 @@ def generate_candidates(
                     f"({format_hms(chunk.start)}-{format_hms(chunk.end)}) - cache"
                 )
                 all_candidates.extend(cached)
+                if progress_callback:
+                    progress_callback(pos, len(chunks), f"Bloc {pos}/{len(chunks)} (cache)")
                 continue
 
             parsed = _try_parse_existing_raw(
@@ -282,6 +361,7 @@ def generate_candidates(
                 start_index=len(all_candidates) + 1,
                 min_duration=min_duration,
                 max_duration=max_duration,
+                composition_mode=composition_mode,
             )
             if parsed:
                 print(
@@ -289,6 +369,8 @@ def generate_candidates(
                     f"({format_hms(chunk.start)}-{format_hms(chunk.end)}) - reused raw log"
                 )
                 all_candidates.extend(parsed)
+                if progress_callback:
+                    progress_callback(pos, len(chunks), f"Bloc {pos}/{len(chunks)} (log reutilise)")
                 continue
 
         print(
@@ -300,15 +382,21 @@ def generate_candidates(
             candidates_per_chunk=candidates_per_chunk,
             min_duration=min_duration,
             max_duration=max_duration,
+            composition_mode=composition_mode,
         )
         try:
             raw = client.generate(
                 prompt,
-                json_schema=candidate_response_schema(max_candidates=candidates_per_chunk),
+                json_schema=candidate_response_schema(
+                    max_candidates=candidates_per_chunk,
+                    allow_montage=composition_mode == "hybrid",
+                ),
             )
         except RuntimeError as exc:
             (logs_dir / f"ollama_chunk_{chunk.index:03d}.error.txt").write_text(str(exc), encoding="utf-8")
             print(f"  skipped: {exc}")
+            if progress_callback:
+                progress_callback(pos, len(chunks), f"Bloc {pos}/{len(chunks)} en erreur")
             continue
         raw_path.write_text(raw, encoding="utf-8")
 
@@ -320,12 +408,15 @@ def generate_candidates(
                 start_index=len(all_candidates) + 1,
                 min_duration=min_duration,
                 max_duration=max_duration,
+                composition_mode=composition_mode,
             )
             write_json(candidates_path, [c.to_dict() for c in candidates])
             all_candidates.extend(candidates)
         except ValueError as exc:
             (logs_dir / f"ollama_chunk_{chunk.index:03d}.error.txt").write_text(str(exc), encoding="utf-8")
-            continue
+        finally:
+            if progress_callback:
+                progress_callback(pos, len(chunks), f"Bloc {pos}/{len(chunks)}")
 
     # Cached chunks can contain IDs produced under an older partial run.
     # Reassign them deterministically after merging to prevent duplicate IDs.
@@ -398,11 +489,12 @@ def local_rank_candidates(candidates: list[ReelCandidate], *, shortlist_count: i
             penalty += 1.0
         # A boundary-refined candidate is not a quality problem; it is expected
         # with small local models.
-        soft_warning_count = len([w for w in candidate.warnings if w != "boundary_refined"])
+        soft_warning_count = len([w for w in candidate.warnings if w not in {"boundary_refined", "composite_montage"}])
         ideal_duration = 22.0
         duration_penalty = min(1.0, abs(candidate.duration - ideal_duration) * 0.025)
         content_bonus = 0.25 if candidate.hook else 0.0
         content_bonus += 0.15 if candidate.reason else 0.0
+        content_bonus += 0.25 if candidate.is_composite else 0.0
         boundary_bonus = ((candidate.boundary_score or 50.0) - 50.0) / 100.0
         return (
             candidate.score - penalty - duration_penalty + content_bonus + boundary_bonus,
@@ -501,6 +593,7 @@ def make_default_selections(shortlist: list[ReelCandidate], *, target_count: int
                 hook=candidate.hook,
                 reason=candidate.reason,
                 transcript_excerpt=candidate.transcript_excerpt,
+                segments=list(candidate.source_segments) if candidate.is_composite else [],
             )
         )
     return selections
@@ -515,6 +608,7 @@ def interactive_select(shortlist: list[ReelCandidate], *, target_count: int) -> 
         visible_warnings = [w for w in candidate.warnings if w != "boundary_refined"]
         warn = f" [WARN {','.join(visible_warnings)}]" if visible_warnings else ""
         refined = " [expanded]" if "boundary_refined" in candidate.warnings else ""
+        montage = f" [montage {len(candidate.source_segments)} plans]" if candidate.is_composite else ""
         boundary = (
             f" | cut {candidate.boundary_score:.0f}/100 {candidate.boundary_method}"
             if candidate.boundary_score is not None
@@ -522,7 +616,7 @@ def interactive_select(shortlist: list[ReelCandidate], *, target_count: int) -> 
         )
         cprint(
             f"{idx:02d}. {candidate.id} | {format_hms(candidate.start)}-{format_hms(candidate.end)} "
-            f"| {candidate.duration:.0f}s | score {candidate.score:.1f}{boundary}{warn}{refined}\n"
+            f"| {candidate.duration:.0f}s | score {candidate.score:.1f}{boundary}{warn}{refined}{montage}\n"
             f"    {candidate.title}\n"
             f"    Hook: {candidate.hook}\n"
             f"    Raison: {candidate.reason}\n"
@@ -571,6 +665,7 @@ def interactive_select(shortlist: list[ReelCandidate], *, target_count: int) -> 
                 hook=candidate.hook,
                 reason=candidate.reason,
                 transcript_excerpt=candidate.transcript_excerpt,
+                segments=list(candidate.source_segments) if candidate.is_composite else [],
             )
         )
     return selections

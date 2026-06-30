@@ -18,6 +18,7 @@ tar \
   --exclude='./build' \
   --exclude='./dist' \
   --exclude='./output' \
+  --exclude='./run_*' \
   --exclude='./reelmaker.tgz' \
   --exclude='./.idea' \
   --exclude='./.vscode' \

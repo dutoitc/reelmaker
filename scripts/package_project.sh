@@ -16,6 +16,7 @@ tar \
   --exclude='./.venv' \
   --exclude='./dist' \
   --exclude='./output' \
+  --exclude='./run_*' \
   --exclude='*/__pycache__' \
   --exclude='*/.pytest_cache' \
   --exclude='*/.mypy_cache' \

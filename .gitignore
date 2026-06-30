@@ -42,4 +42,5 @@ Thumbs.db
 *.tgz
 *.tar.gz
 
+# Local run scripts
 run_*

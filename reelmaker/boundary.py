@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import ReelCandidate, SubtitleCue, TranscriptWord
+from .models import ReelCandidate, ReelSegment, SubtitleCue, TranscriptWord
 
 _SENTENCE_ENDINGS = (".", "!", "?", "…")
 
@@ -29,19 +29,99 @@ def refine_candidate_boundaries(
 ) -> list[ReelCandidate]:
     """Snap candidate cuts to natural speech boundaries.
 
-    Word timestamps are preferred because they expose real pauses between
-    spoken words. SRT/VTT cue boundaries remain a compatible fallback.
+    Composite candidates are refined segment by segment, then kept in their
+    editorial order. A final cut strongly prefers punctuation or a measured
+    pause so rendered reels do not stop in the middle of a sentence.
     """
     if not candidates or not cues or mode == "off":
         return candidates
 
     timed_words = _sorted_valid_words(words or [])
     use_words = mode in {"auto", "words"} and bool(timed_words)
-    if mode == "words" and not timed_words:
-        use_words = False
 
+    refined: list[ReelCandidate] = []
+    for candidate in candidates:
+        segments = candidate.source_segments
+        if len(segments) <= 1:
+            refined.extend(
+                _refine_single_candidates(
+                    [candidate],
+                    cues,
+                    timed_words,
+                    use_words=use_words,
+                    min_duration=min_duration,
+                    target_duration=target_duration,
+                    max_duration=max_duration,
+                    pre_padding=pre_padding,
+                    post_padding=post_padding,
+                )
+            )
+            continue
+
+        refined_segments: list[ReelSegment] = []
+        segment_scores: list[float] = []
+        reasons: list[str] = []
+        per_segment_min = max(3, min(min_duration, 8))
+        per_segment_target = max(per_segment_min, min(target_duration, 14))
+        per_segment_max = max(per_segment_target, min(max_duration, 30))
+        for index, segment in enumerate(segments, start=1):
+            temporary = ReelCandidate(
+                id=candidate.id,
+                start=segment.start,
+                end=segment.end,
+                title=candidate.title,
+                hook=candidate.hook,
+                reason=candidate.reason,
+                score=candidate.score,
+                transcript_excerpt=candidate.transcript_excerpt,
+            )
+            result = _refine_single_candidates(
+                [temporary],
+                cues,
+                timed_words,
+                use_words=use_words,
+                min_duration=per_segment_min,
+                target_duration=per_segment_target,
+                max_duration=per_segment_max,
+                pre_padding=pre_padding,
+                post_padding=post_padding,
+            )[0]
+            refined_segments.append(ReelSegment(result.start, result.end))
+            if result.boundary_score is not None:
+                segment_scores.append(result.boundary_score)
+            reasons.extend(f"segment{index}:{reason}" for reason in result.boundary_reasons)
+
+        candidate.segments = refined_segments
+        candidate.start = refined_segments[0].start
+        candidate.end = refined_segments[-1].end
+        candidate.boundary_method = "segments"
+        candidate.boundary_score = round(sum(segment_scores) / len(segment_scores), 1) if segment_scores else None
+        candidate.boundary_reasons = reasons
+        if "boundary_refined" not in candidate.warnings:
+            candidate.warnings.append("boundary_refined")
+        if candidate.duration < min_duration and "too_short" not in candidate.warnings:
+            candidate.warnings.append("too_short")
+        if candidate.duration > max_duration and "too_long" not in candidate.warnings:
+            candidate.warnings.append("too_long")
+        refined.append(candidate)
+
+    return _remove_near_duplicates(refined)
+
+
+def _refine_single_candidates(
+    candidates: list[ReelCandidate],
+    cues: list[SubtitleCue],
+    timed_words: list[TranscriptWord],
+    *,
+    use_words: bool,
+    min_duration: int,
+    target_duration: int,
+    max_duration: int,
+    pre_padding: float,
+    post_padding: float,
+) -> list[ReelCandidate]:
     if use_words:
-        refined = _refine_with_words(
+        return _refine_with_words(
             candidates,
             cues,
             timed_words,
@@ -51,18 +131,15 @@ def refine_candidate_boundaries(
             pre_padding=pre_padding,
             post_padding=post_padding,
         )
-    else:
-        refined = _refine_with_cues(
-            candidates,
-            cues,
-            min_duration=min_duration,
-            target_duration=target_duration,
-            max_duration=max_duration,
-            pre_padding=pre_padding,
-            post_padding=post_padding,
-        )
-
-    return _remove_near_duplicates(refined)
+    return _refine_with_cues(
+        candidates,
+        cues,
+        min_duration=min_duration,
+        target_duration=target_duration,
+        max_duration=max_duration,
+        pre_padding=pre_padding,
+        post_padding=post_padding,
+    )
 
 
 def _sorted_valid_words(words: list[TranscriptWord]) -> list[TranscriptWord]:
@@ -297,19 +374,30 @@ def _choose_end_point(
         point
         for point in points
         if minimum_end <= point.time <= maximum_end
-        and original_end - 2.0 <= point.time <= max(original_end + 8.0, preferred_end + 4.0)
+        and original_end - 2.0 <= point.time <= max(original_end + 10.0, preferred_end + 6.0)
     ]
     if not nearby:
         nearby = [point for point in points if minimum_end <= point.time <= maximum_end]
     if not nearby:
         return None
 
+    complete = [
+        point
+        for point in nearby
+        if "sentence_end" in point.reasons
+        or "transcript_end" in point.reasons
+        or point.available_silence >= 0.6
+        or "speaker_change" in point.reasons
+    ]
+    pool = complete or nearby
+
     def utility(point: BoundaryPoint) -> float:
         distance = abs(point.time - preferred_end)
-        early_penalty = max(0.0, original_end - point.time) * 16.0
-        return point.score - distance * 18.0 - early_penalty
+        early_penalty = max(0.0, original_end - point.time) * 22.0
+        incomplete_penalty = 35.0 if point not in complete else 0.0
+        return point.score - distance * 25.0 - early_penalty - incomplete_penalty
 
-    return max(nearby, key=utility)
+    return max(pool, key=utility)
 
 
 def _refine_with_cues(
@@ -350,6 +438,14 @@ def _refine_with_cues(
             last += 1
             new_end = next_end
 
+        # Never stop on an obviously unfinished cue when a natural end is nearby.
+        while last + 1 < len(cues) and not _cue_is_complete_end(cues, last):
+            next_end = min(video_end, cues[last + 1].end + post_padding)
+            if next_end - new_start > max_duration:
+                break
+            last += 1
+            new_end = next_end
+
         if first > 0 and (new_end - new_start) < target_duration:
             previous = cues[first - 1]
             if cues[first].start - previous.end <= 1.5:
@@ -373,6 +469,16 @@ def _refine_with_cues(
 
     return refined
 
+
+
+
+def _cue_is_complete_end(cues: list[SubtitleCue], index: int) -> bool:
+    if _is_sentence_end(cues[index].text):
+        return True
+    if index + 1 >= len(cues):
+        return True
+    gap = max(0.0, cues[index + 1].start - cues[index].end)
+    return gap >= 0.6
 
 def _cue_start_score(cues: list[SubtitleCue], index: int) -> tuple[float, list[str]]:
     if index == 0:
@@ -440,6 +546,13 @@ def _mark_boundary_result(
         candidate.warnings.append("too_long")
     if candidate.boundary_score is not None and candidate.boundary_score < 45.0:
         candidate.warnings.append("boundary_low_confidence")
+    end_reasons = [reason for reason in candidate.boundary_reasons if reason.startswith("end:")]
+    if end_reasons and not any(
+        token in reason
+        for reason in end_reasons
+        for token in ("sentence_end", "pause_0.6", "pause_0.7", "pause_0.8", "pause_0.9", "pause_1", "transcript_end", "speaker_change")
+    ):
+        candidate.warnings.append("boundary_incomplete_end")
 
 
 def _is_sentence_end(text: str) -> bool:
@@ -448,9 +561,10 @@ def _is_sentence_end(text: str) -> bool:
 
 def _remove_near_duplicates(candidates: list[ReelCandidate]) -> list[ReelCandidate]:
     unique: list[ReelCandidate] = []
-    seen: set[tuple[int, int, str]] = set()
+    seen: set[tuple[object, str]] = set()
     for candidate in candidates:
-        key = (round(candidate.start), round(candidate.end), candidate.title.lower().strip()[:30])
+        segment_key = tuple((round(segment.start), round(segment.end)) for segment in candidate.source_segments)
+        key = (segment_key, candidate.title.lower().strip()[:30])
         if key in seen:
             continue
         seen.add(key)

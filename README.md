@@ -3,12 +3,13 @@
 Generate several vertical reels from a long video with local tools:
 
 - **WhisperX** for local MP4 transcription and word timestamps;
-- **Ollama** for local reel candidate selection;
+- **Ollama** for local editorial selection, montage proposals, and subtitle correction;
 - **FFmpeg** for 9:16 rendering, subtitles, and optional end cards;
-- **OpenCV** for local face/motion crop hints;
-- **PySceneDetect** for optional shot detection and per-shot framing.
+- **OpenCV** for local face/motion framing hints;
+- **PySceneDetect** for optional shot detection and per-shot framing;
+- **PySide6** for the optional Windows desktop interface.
 
-Version **0.5.1** stabilizes Ollama JSON generation and keeps the scene-aware framing introduced in 0.5.0.
+Version **0.6.0** adds a Windows GUI, multi-run time estimates, composite reels, safer wide-shot framing, stronger spoken boundaries, and stricter subtitle/render validation.
 
 ## Recommended environment
 
@@ -23,9 +24,7 @@ Version **0.5.1** stabilizes Ollama JSON generation and keeps the scene-aware fr
 
 ### 1. Install Python 3.11
 
-Install the 64-bit version from [python.org](https://www.python.org/downloads/windows/), including the Python launcher.
-
-Verify in Git Bash:
+Install the 64-bit version from <https://www.python.org/downloads/windows/>, including the Python launcher.
 
 ```bash
 py -3.11 --version
@@ -33,7 +32,7 @@ py -3.11 --version
 
 ### 2. Install FFmpeg
 
-FFmpeg publishes source code and links to Windows builds on its [official download page](https://ffmpeg.org/download.html). Download a Windows build, extract it, and add its `bin` directory to the Windows `PATH`.
+Download a Windows build from the links on <https://ffmpeg.org/download.html>, extract it, and add its `bin` directory to the Windows `PATH`.
 
 Close and reopen Git Bash, then verify:
 
@@ -44,7 +43,7 @@ ffprobe -version
 
 ### 3. Install Ollama
 
-Install Ollama from the [official Windows page](https://ollama.com/download/windows). It runs in the background and exposes its local API on port `11434`.
+Install Ollama from <https://ollama.com/download/windows>, then:
 
 ```bash
 ollama --version
@@ -54,17 +53,16 @@ ollama run qwen3:4b --think=false "Réponds uniquement: OK"
 
 ### 4. Install CUDA for WhisperX GPU mode
 
-WhisperX currently requests the **CUDA 12.8 toolkit** for GPU acceleration. Install it from [NVIDIA CUDA Downloads](https://developer.nvidia.com/cuda-downloads), then restart Windows if requested.
-
-Verify the NVIDIA driver:
+For the current WhisperX environment, install the **CUDA 12.8 toolkit** from <https://developer.nvidia.com/cuda-downloads>.
 
 ```bash
 nvidia-smi
+nvcc --version
 ```
 
 CUDA is not required for CPU-only transcription.
 
-### 5. Create the project environment
+### 5. Create the complete project environment
 
 From the Reelmaker directory in Git Bash:
 
@@ -72,12 +70,19 @@ From the Reelmaker directory in Git Bash:
 py -3.11 -m venv .venv
 source .venv/Scripts/activate
 python -m pip install --upgrade pip setuptools wheel
-pip install -e ".[dev,vision,transcription]"
+pip install -e ".[dev,vision,transcription,gui]"
 ```
 
-The `transcription` extra installs WhisperX. The `vision` extra installs OpenCV and PySceneDetect for smart and per-shot crops. The `dev` extra installs the test suite.
+Extras:
 
-Verify the environment:
+| Extra | Content |
+|---|---|
+| `transcription` | WhisperX and its transcription dependencies |
+| `vision` | OpenCV and PySceneDetect |
+| `gui` | PySide6 desktop interface |
+| `dev` | pytest and project checks |
+
+Verify:
 
 ```bash
 python -c "import whisperx; print('WhisperX OK')"
@@ -93,9 +98,20 @@ Expected for GPU mode:
 CUDA: True ...
 ```
 
-### Base installation without WhisperX
+If Torch reports a CPU build such as `2.8.0+cpu`, reinstall its CUDA 12.8 wheels in the active environment:
 
-For the existing SRT/YouTube workflow only:
+```bash
+python -m pip uninstall -y torch torchvision torchaudio
+python -m pip install \
+  torch==2.8.0 \
+  torchvision==0.23.0 \
+  torchaudio==2.8.0 \
+  --index-url https://download.pytorch.org/whl/cu128
+```
+
+### Base installation without WhisperX or GUI
+
+For the SRT/YouTube CLI workflow only:
 
 ```bash
 py -3.11 -m venv .venv
@@ -104,9 +120,234 @@ python -m pip install --upgrade pip setuptools wheel
 pip install -e ".[vision]"
 ```
 
-### CPU-only WhisperX
+## Windows desktop interface
 
-Install normally, then select CPU explicitly. A smaller model is recommended:
+Launch from Git Bash:
+
+```bash
+bash startGui.sh
+```
+
+Or double-click:
+
+```text
+startGui.bat
+```
+
+Alternative after activating the environment:
+
+```bash
+reelmaker-gui
+```
+
+The interface provides:
+
+- MP4 and output-directory selection;
+- Ollama model, target count, crop mode, composition mode, and subtitle correction;
+- current stage and stage progress;
+- overall progress;
+- elapsed time;
+- estimated remaining time for the current stage;
+- live console logs;
+- cancel and open-output buttons.
+
+The GUI remains a thin layer over the CLI. Processing logic stays in the existing modules and the GUI starts `python -m reelmaker all` as a subprocess.
+
+## Multi-run time estimates
+
+Time history is useful rather than cosmetic: WhisperX, Ollama, scene detection, and FFmpeg have different speeds on each machine.
+
+Reelmaker stores local timing samples in:
+
+```text
+%LOCALAPPDATA%\Reelmaker\timing_history.json
+```
+
+On non-Windows systems it uses:
+
+```text
+~/.reelmaker/timing_history.json
+```
+
+It records the last 20 normalized samples per configuration:
+
+- WhisperX seconds per source-video second, separated by provider/model/device/compute type;
+- Ollama seconds per transcript chunk, separated by model and composition mode;
+- PySceneDetect seconds per source-video second;
+- FFmpeg seconds per rendered source second, separated by crop mode/preset/FPS.
+
+The median is used for the next run. Estimates are therefore rough on the first run and improve after several similar runs. The file contains timing data only and is not included in project archives.
+
+## Direct MP4 workflow
+
+### Transcribe only
+
+```bash
+python -m reelmaker transcribe \
+  --source-video "/c/Videos/reportage.mp4" \
+  --output-dir "output/reportage"
+```
+
+With only `--source-video`, `--transcription auto` selects WhisperX. The first run downloads the Whisper and French alignment models.
+
+Generated files:
+
+```text
+output/reportage/
+  transcript.json
+  transcript.srt
+  transcript.txt
+```
+
+### Analyze and render
+
+```bash
+python -m reelmaker all \
+  --source-video "/c/Videos/reportage.mp4" \
+  --model "qwen3:4b" \
+  --target-count 6 \
+  --ranking-mode local \
+  --composition-mode hybrid \
+  --crop-mode scene-smart \
+  --subtitle-correction ollama \
+  --output-dir "output/reportage"
+```
+
+Runtime dependencies are checked before expensive transcription. For example, `scene-smart` now fails immediately when PySceneDetect is missing instead of analyzing the full video and failing during rendering.
+
+If no MP4 is produced, the command exits with an error and points to `render_report.json` and the corresponding `ffmpeg.error.txt` files.
+
+## Editorial composition
+
+Default mode:
+
+```bash
+--composition-mode hybrid
+```
+
+`hybrid` allows Ollama to propose either:
+
+- one continuous extract;
+- or a montage of two or three non-contiguous passages about the same subject.
+
+Composite proposals must form a progression such as hook → explanation → conclusion. Their source intervals are stored in `segments`, then rendered in editorial order with subtitles remapped to the continuous output timeline.
+
+Use the previous behaviour when required:
+
+```bash
+--composition-mode contiguous
+```
+
+Composite generation currently works within each transcript analysis chunk. A future global editorial pass may combine distant passages across the complete programme.
+
+## Natural spoken boundaries
+
+Default mode:
+
+```bash
+--boundary-mode auto
+```
+
+Reelmaker combines:
+
+1. WhisperX word timestamps and measured pauses;
+2. sentence punctuation;
+3. subtitle cue boundaries;
+4. optional speaker changes;
+5. a strong preference for a complete final sentence.
+
+Composite reels are refined segment by segment. A candidate receives `boundary_incomplete_end` when a confident natural ending cannot be found within the duration limit.
+
+Available modes:
+
+| Mode | Behaviour |
+|---|---|
+| `auto` | word pauses first, cue fallback |
+| `words` | prefer word timestamps; cue fallback if unavailable |
+| `cues` | subtitle cue boundaries only |
+| `off` | keep Ollama timecodes unchanged |
+
+## Scene-aware and wide-shot framing
+
+Fast static mode:
+
+```bash
+--crop-mode smart
+```
+
+Per-shot mode for reportages:
+
+```bash
+--crop-mode scene-smart
+```
+
+`scene-smart` uses PySceneDetect, writes `scenes.json`, and recalculates framing for each detected shot.
+
+Framing safety rules in 0.6.0:
+
+- one clearly dominant face can be isolated;
+- close faces can be kept in the same crop;
+- two similarly important people spread across a horizontal shot use a **fit-blur** layout so neither face is cut;
+- wide landscapes, monuments, slides, or full-screen visuals without a reliable subject also use fit-blur instead of an arbitrary destructive crop;
+- uncertain motion is no longer enough to force a crop.
+
+Fit-blur preserves the complete horizontal frame over a blurred vertical background.
+
+Current limitation: Reelmaker does not yet localize the active speaker from the audio. In an ambiguous two-person shot it deliberately preserves both people instead of guessing and cutting the wrong person.
+
+Scene parameters:
+
+| Parameter | Default | Usage |
+|---|---:|---|
+| `--scene-threshold` | `27` | lower detects more cuts; raise for false cuts |
+| `--scene-min-frames` | `15` | ignores very short shots/transitions |
+| `--force-scene-detection` | off | rebuild `scenes.json` |
+| `--scene-detection off` | — | one static smart decision |
+
+Test detection only:
+
+```bash
+python -m reelmaker scenes \
+  --source-video "/c/Videos/reportage.mp4" \
+  --output-dir "output/reportage"
+```
+
+## Subtitle quality and completeness
+
+The CLI and GUI now default to:
+
+```bash
+--subtitle-correction ollama
+```
+
+The correction pass uses neighbouring cues as context to repair likely ASR mistakes, accents, apostrophes, agreements, and punctuation without changing meaning. If Ollama correction fails, conservative basic cleanup is used and the error is kept beside the reel.
+
+Long captions are split into several timed cues instead of being truncated. All source segments in a composite reel are remapped to the final timeline.
+
+By default, subtitle burn failures are errors: Reelmaker will not silently deliver a video without subtitles. The previous fallback is available only when explicitly requested:
+
+```bash
+--allow-subtitle-fallback
+```
+
+Disable subtitles entirely with:
+
+```bash
+--no-burn-subtitles
+```
+
+## Useful WhisperX parameters
+
+| Parameter | Default | Usage |
+|---|---:|---|
+| `--whisper-model` | `large-v3` | quality-oriented French transcription |
+| `--whisper-language` | `fr` | use `auto` for detection |
+| `--whisper-device` | `auto` | selects CUDA when available |
+| `--whisper-compute-type` | `auto` | float16 on CUDA, int8 on CPU |
+| `--whisper-batch-size` | `4` | reduce to 2 or 1 if VRAM is insufficient |
+| `--force-transcription` | off | ignore transcript cache |
+
+CPU example:
 
 ```bash
 python -m reelmaker transcribe \
@@ -117,144 +358,7 @@ python -m reelmaker transcribe \
   --output-dir "output/reportage"
 ```
 
-## Direct MP4 workflow
-
-### 1. Transcribe only
-
-```bash
-python -m reelmaker transcribe \
-  --source-video "/c/Videos/reportage.mp4" \
-  --output-dir "output/reportage"
-```
-
-With only `--source-video`, `--transcription auto` selects WhisperX. The first run downloads the Whisper and French alignment models. Processing remains local after the required models are cached.
-
-Generated files:
-
-```text
-output/reportage/
-  transcript.json   # cues, word timestamps and cache fingerprints
-  transcript.srt
-  transcript.txt
-```
-
-### 2. Analyze and render
-
-```bash
-python -m reelmaker all \
-  --source-video "/c/Videos/reportage.mp4" \
-  --model "qwen3:4b" \
-  --target-count 10 \
-  --ranking-mode local \
-  --crop-mode scene-smart \
-  --output-dir "output/reportage"
-```
-
-## Scene-aware framing
-
-The existing default remains the fast static crop:
-
-```bash
---crop-mode smart
-```
-
-For reportages with several camera shots, enable one crop decision per detected shot:
-
-```bash
-python -m reelmaker all \
-  --source-video "/c/Videos/reportage.mp4" \
-  --crop-mode scene-smart \
-  --output-dir "output/reportage"
-```
-
-Reelmaker uses local PySceneDetect, writes `scenes.json`, recalculates face/motion framing for each shot, and stores the resulting `framing_plan` in each reel `metadata.json`. Similar adjacent crops are merged to avoid unnecessary rendering segments.
-
-Test scene detection alone:
-
-```bash
-python -m reelmaker scenes \
-  --source-video "/c/Videos/reportage.mp4" \
-  --output-dir "output/reportage"
-```
-
-Parameters:
-
-| Parameter | Default | Usage |
-|---|---:|---|
-| `--scene-threshold` | `27` | lower detects more cuts; raise it for false cuts |
-| `--scene-min-frames` | `15` | ignores very short shots/transitions |
-| `--force-scene-detection` | off | rebuild `scenes.json` |
-| `--scene-detection off` | — | use a single static smart crop even with `scene-smart` |
-
-PySceneDetect is pinned to `>=0.7,<0.8` because its public Python API is still evolving. Scene-aware mode is slower than static smart crop because each shot is rendered separately before final concatenation and subtitle burn.
-
-## Natural cut refinement
-
-Default mode:
-
-```bash
---boundary-mode auto
-```
-
-Behaviour:
-
-1. use WhisperX word timestamps and measured pauses when available;
-2. combine pauses, sentence punctuation, cue boundaries and optional speaker changes;
-3. fall back to SRT/VTT cue boundaries when word timestamps are unavailable;
-4. write the method, score and reasons into `candidates.json` and `shortlist.json`.
-
-Available modes:
-
-| Mode | Behaviour |
-|---|---|
-| `auto` | word pauses first, cue fallback |
-| `words` | prefer word timestamps; cue fallback if unavailable |
-| `cues` | use subtitle cue boundaries only |
-| `off` | keep Ollama timecodes unchanged, useful for comparison |
-
-Example before/after comparison:
-
-```bash
-python -m reelmaker analyze \
-  --source-video "/c/Videos/reportage.mp4" \
-  --boundary-mode off \
-  --output-dir "output/baseline"
-
-python -m reelmaker analyze \
-  --source-video "/c/Videos/reportage.mp4" \
-  --boundary-mode auto \
-  --output-dir "output/refined"
-```
-
-Candidate metadata example:
-
-```json
-{
-  "boundary_method": "words",
-  "boundary_score": 82.5,
-  "boundary_reasons": [
-    "start:pause_0.74s",
-    "start:previous_sentence_end",
-    "end:sentence_end",
-    "end:pause_1.10s"
-  ]
-}
-```
-
-## Useful WhisperX parameters
-
-| Parameter | Default | Usage |
-|---|---:|---|
-| `--whisper-model` | `large-v3` | quality-oriented French transcription |
-| `--whisper-language` | `fr` | use `auto` for language detection |
-| `--whisper-device` | `auto` | selects CUDA when available |
-| `--whisper-compute-type` | `auto` | float16 on CUDA, int8 on CPU |
-| `--whisper-batch-size` | `4` | reduce to 2 or 1 if VRAM is insufficient |
-| `--force-transcription` | off | ignore the fingerprinted transcript cache |
-
-For a 12 GB NVIDIA GPU, start with `large-v3`, `float16`, batch size 4. If memory is insufficient, try batch size 2, then 1; after that try `--whisper-compute-type int8` or a smaller model.
-
-## Existing YouTube/SRT workflow
+## YouTube/SRT workflow
 
 YouTube subtitles with a local high-quality video:
 
@@ -277,15 +381,25 @@ python -m reelmaker all \
 
 Selection rule for `--transcription auto`:
 
-1. supplied SRT/VTT: use it;
-2. supplied YouTube URL: extract its subtitles;
-3. local MP4 only: use WhisperX.
+1. supplied SRT/VTT;
+2. supplied YouTube URL;
+3. local MP4 only → WhisperX.
 
-Force a source with:
+## Cache
+
+- `transcript.json`: source and WhisperX settings fingerprint;
+- `scenes.json`: source and scene settings fingerprint;
+- Ollama candidate caches: `output/.../logs/`, separated between contiguous and hybrid analysis;
+- corrected subtitles: fingerprinted by cues, reel selection, title, model, and schema;
+- timing history: outside the project under the local application-data directory.
+
+Force recalculation with:
 
 ```bash
---transcription subtitles
---transcription whisperx
+--force-transcription
+--force-ollama
+--force-scene-detection
+--force-subtitle-correction
 ```
 
 ## Troubleshooting
@@ -298,9 +412,12 @@ pip install -e ".[vision]"
 python -c "import scenedetect; print(scenedetect.__version__)"
 ```
 
-### `ffmpeg: command not found`
+### `PySide6 is not installed`
 
-The extracted FFmpeg `bin` directory is not in the Windows `PATH`, or Git Bash was not reopened after the change.
+```bash
+source .venv/Scripts/activate
+pip install -e ".[gui]"
+```
 
 ### `WhisperX is not installed`
 
@@ -311,11 +428,15 @@ pip install -e ".[transcription]"
 
 ### Torch reports `CUDA: False`
 
-Check `nvidia-smi`, the CUDA 12.8 installation, and that the active virtual environment contains the expected Torch build. CPU mode remains available with `--whisper-device cpu`.
+Verify that the active environment contains the CUDA build, not a package ending in `+cpu`.
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.version.cuda)"
+```
 
 ### GPU out of memory
 
-Try in this order:
+Try:
 
 ```bash
 --whisper-batch-size 2
@@ -324,35 +445,18 @@ Try in this order:
 --whisper-model medium
 ```
 
-### Ollama connection error
+### TorchCodec warning
 
-Open the Ollama Windows application, then verify:
+The current WhisperX path preloads audio and can continue even when Pyannote warns that TorchCodec decoding is unavailable. Treat it as a warning unless a later traceback explicitly fails audio decoding or diarization.
+
+### Ollama connection or structured-output error
 
 ```bash
 ollama list
 ollama run qwen3:4b --think=false "Réponds uniquement: OK"
 ```
 
-### `No valid JSON found in model response`
-
-Version 0.5.1 uses Ollama structured outputs with a JSON Schema and disables Qwen 3 thinking through the API. Update Ollama when an HTTP 400 reports that `format` or `think` is unsupported.
-
-An interrupted 0.5.0 run can be restarted directly: `transcript.json` is reused and the invalid Ollama chunks are regenerated. Add `--force-ollama` once only when you explicitly want to ignore all candidate caches.
-
-## Cache
-
-`transcript.json` is reused only when these still match:
-
-- provider;
-- sampled source-file fingerprint;
-- transcription settings;
-- WhisperX package version.
-
-Invalidate it with `--force-transcription`.
-
-`scenes.json` is reused only when the sampled video fingerprint and scene settings match. Invalidate it with `--force-scene-detection`.
-
-Ollama candidate caches remain under `output/.../logs/` and can be invalidated with `--force-ollama`.
+Update Ollama if an HTTP 400 reports unsupported `format` or `think` fields.
 
 ## Main output structure
 
@@ -363,34 +467,40 @@ output/reportage/
   transcript.json
   transcript.srt
   transcript.txt
-  scenes.json          # generated when scene-smart/scenes is used
+  scenes.json
   transcript_chunks.json
   candidates.json
   shortlist.json
   selected_reels.json
   reels/
+    render_report.json
     R01/
       R01.mp4
       subtitles.srt
       subtitles.ass
+      subtitles_corrected.json
       metadata.json
       caption.txt
 ```
 
-## Development checks
+## Local run scripts and project archive
 
-```bash
-source .venv/Scripts/activate
-pip install -e ".[dev]"
-bash scripts/check_project.sh
-```
+Root files matching `run_*` are ignored by Git and excluded from `reelmaker.tgz`. The maintained example under `examples/` remains part of the project.
 
-The base CI suite does not load a real WhisperX model or decode a real video with PySceneDetect. Those adapters are unit-tested with injected fakes; Windows GPU processing remains an integration test.
-
-## Create a clean archive for ChatGPT
+Create the clean full archive for a future ChatGPT iteration:
 
 ```bash
 bash createTarGz.sh
 ```
 
-This creates `reelmaker.tgz` at the project root without output, media, caches, environments, build files or secrets.
+The command creates `reelmaker.tgz` at the project root without output, media, local run scripts, caches, environments, build files, or secrets.
+
+## Development checks
+
+```bash
+source .venv/Scripts/activate
+pip install -e ".[dev,vision,transcription,gui]"
+bash scripts/check_project.sh
+```
+
+The full environment currently runs 45 tests. The GUI smoke test is skipped automatically when PySide6 is not installed.
