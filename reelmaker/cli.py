@@ -14,6 +14,7 @@ from .analyzer import (
 )
 from .boundary import refine_candidate_boundaries
 from .console import configure_console
+from .davinci_xml import export_davinci_xmls
 from .models import ProjectPaths, ReelSegment, ReelSelection, TranscriptDocument
 from .ollama_client import OllamaClient
 from .progress import ProgressReporter
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ["all", "analyze", "render", "transcribe", "subtitles", "scenes"]:
+    for name in ["all", "analyze", "render", "xml", "transcribe", "subtitles", "scenes"]:
         add_common_args(sub.add_parser(name))
     return parser
 
@@ -111,9 +112,15 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="If subtitle burn fails, keep a video without subtitles. Disabled by default to avoid silent incomplete output.",
     )
-    parser.add_argument("--subtitle-font-size", type=int, default=60, help="Burned subtitle font size for 1080x1920 ASS subtitles.")
+    parser.add_argument(
+        "--keep-render-intermediates",
+        action="store_true",
+        help="Keep *_content.mp4, *_end_card.mp4, concat.txt, and end_card.ass after a successful final render.",
+    )
+    parser.add_argument("--davinci-xml", action="store_true", help="Export one Final Cut Pro 7 XML timeline per reel for DaVinci Resolve, referencing the original source video.")
+    parser.add_argument("--subtitle-font-size", type=int, default=72, help="Maximum burned subtitle font size for 1080x1920 ASS subtitles; reduced automatically only when needed to fit.")
     parser.add_argument("--subtitle-margin-v", type=int, default=150, help="Vertical bottom margin for subtitles. Larger = higher above bottom.")
-    parser.add_argument("--subtitle-wrap-width", type=int, default=23, help="Approximate subtitle characters per line before ASS wrapping.")
+    parser.add_argument("--subtitle-wrap-width", type=int, default=30, help="Approximate characters per subtitle line; final ASS layout is balanced and width-safe.")
     parser.add_argument("--subtitle-max-lines", type=int, default=2, help="Preferred subtitle line count. Text is split or reduced, never truncated.")
     parser.add_argument("--subtitle-position", choices=["auto", "bottom", "top"], default="auto", help="auto moves generated subtitles away from text already present in the video.")
     parser.add_argument("--correction-dictionary", type=Path, help="Optional JSON dictionary merged with the built-in French/Nord-vaudois corrections.")
@@ -430,6 +437,62 @@ def load_selections(path: Path) -> list[ReelSelection]:
     return selections
 
 
+def _update_davinci_paths(output_dir: Path, xml_paths: list[Path]) -> None:
+    path_by_id = {path.stem: path for path in xml_paths}
+    report_path = output_dir / "render_report.json"
+    if report_path.exists():
+        report = read_json(report_path)
+        if isinstance(report, list):
+            for item in report:
+                if isinstance(item, dict) and str(item.get("id") or "") in path_by_id:
+                    item["davinci_xml"] = str(path_by_id[str(item["id"])])
+            write_json(report_path, report)
+    for reel_id, xml_path in path_by_id.items():
+        metadata_path = output_dir / reel_id / "metadata.json"
+        if not metadata_path.exists():
+            continue
+        metadata = read_json(metadata_path)
+        if isinstance(metadata, dict):
+            metadata["davinci_xml"] = str(xml_path)
+            write_json(metadata_path, metadata)
+
+
+def run_xml(
+    args: argparse.Namespace,
+    selections: list[ReelSelection] | None = None,
+    reporter: ProgressReporter | None = None,
+) -> list[Path]:
+    paths = ProjectPaths.create(args.output_dir)
+    source_video = resolve_source_video(args, paths)
+    if selections is None:
+        selected_path = args.selected_reels or (paths.output_dir / "selected_reels.json")
+        if not selected_path.exists():
+            fail(f"Selected reels file not found: {selected_path}")
+        selections = load_selections(selected_path)
+    if not selections:
+        fail("No selected reels to export.")
+
+    if reporter:
+        reporter.start_stage("export", "Export XML DaVinci Resolve", total=max(1, len(selections)))
+    try:
+        xml_paths = export_davinci_xmls(
+            source_video=source_video,
+            selections=selections,
+            output_dir=paths.output_dir / "reels",
+            timeline_fps=args.fps,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        if reporter:
+            reporter.fail(str(exc))
+        fail(str(exc))
+    _update_davinci_paths(paths.output_dir / "reels", xml_paths)
+    if reporter:
+        reporter.update(len(xml_paths), message=f"{len(xml_paths)} XML")
+        reporter.finish_stage(record_history=False, message=f"{len(xml_paths)} XML")
+    print(f"DaVinci XML exported: {len(xml_paths)} timeline(s) in {paths.output_dir / 'reels'}")
+    return xml_paths
+
+
 def run_render(
     args: argparse.Namespace,
     selections: list[ReelSelection] | None = None,
@@ -487,6 +550,7 @@ def run_render(
         crf=args.crf,
         preset=args.preset,
         allow_subtitle_fallback=args.allow_subtitle_fallback,
+        keep_render_intermediates=args.keep_render_intermediates,
         progress_callback=(lambda current, total, message: reporter.update(current, message=message)) if reporter else None,
     )
     if reporter:
@@ -498,6 +562,8 @@ def run_render(
         fail(f"No reel video was generated. Check {report_path} and each reel ffmpeg.error.txt file.")
     if ok_count < len(results):
         print(f"WARNING: {len(results) - ok_count} reel(s) failed. Check {report_path}.")
+    if args.davinci_xml:
+        run_xml(args, selections=selections, reporter=reporter)
 
 
 def run_all(args: argparse.Namespace, reporter: ProgressReporter | None = None) -> None:
@@ -511,6 +577,11 @@ def validate_runtime(args: argparse.Namespace) -> None:
     if args.command in {"all", "render", "scenes"} and not getattr(args, "no_render", False):
         try:
             ensure_tool("ffmpeg")
+            ensure_tool("ffprobe")
+        except RuntimeError as exc:
+            fail(str(exc))
+    if args.command == "xml":
+        try:
             ensure_tool("ffprobe")
         except RuntimeError as exc:
             fail(str(exc))
@@ -544,6 +615,8 @@ def main(argv: list[str] | None = None) -> None:
             run_analyze(args, reporter)
         elif args.command == "render":
             run_render(args, reporter=reporter)
+        elif args.command == "xml":
+            run_xml(args, reporter=reporter)
         elif args.command == "all":
             run_all(args, reporter)
         else:

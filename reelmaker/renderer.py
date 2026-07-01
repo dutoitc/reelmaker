@@ -12,6 +12,7 @@ from .ollama_client import OllamaClient
 from .scene_analysis import Scene
 from .subtitle_corrector import maybe_correct_cues
 from .subtitles import cues_for_segments, split_cues_for_display, write_srt
+from .subtitle_layout import _subtitle_ass_layout, _text_width_units, write_ass_subtitles
 from .timecode import format_hms
 from .utils import run_command, write_json
 from .vision import CropHint
@@ -48,55 +49,8 @@ def _wrap_ass_lines(text: str, *, width: int = 24) -> list[str]:
 
 
 def _wrap_ass(text: str, *, width: int = 24, max_lines: int = 2) -> str:
-    # max_lines is retained for API compatibility, but text is never truncated.
+    # End-card helper. Subtitle layout uses measured, balanced lines below.
     return r"\N".join(_wrap_ass_lines(text, width=width))
-
-
-def write_ass_subtitles(
-    path: Path,
-    cues: list[SubtitleCue],
-    *,
-    font_size: int = 60,
-    margin_v: int = 150,
-    wrap_width: int = 23,
-    max_lines: int = 2,
-    play_res_x: int = 1080,
-    play_res_y: int = 1920,
-    position: str = "bottom",
-) -> None:
-    alignment = 8 if position == "top" else 2
-    header = f"""[Script Info]
-ScriptType: v4.00+
-PlayResX: {play_res_x}
-PlayResY: {play_res_y}
-ScaledBorderAndShadow: yes
-WrapStyle: 2
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Reel,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&HA0000000,1,0,0,0,100,100,0,0,1,5,1,{alignment},80,80,{margin_v},1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-    lines = [header.rstrip()]
-    for cue in cues:
-        wrapped_lines = _wrap_ass_lines(cue.text, width=wrap_width)
-        if not wrapped_lines:
-            continue
-        effective_size = font_size
-        if len(wrapped_lines) > max(1, max_lines):
-            effective_size = max(34, int(round(font_size * max_lines / len(wrapped_lines))))
-        longest_line = max(len(line) for line in wrapped_lines)
-        if longest_line > wrap_width:
-            effective_size = min(
-                effective_size,
-                max(28, int(round(font_size * wrap_width / longest_line))),
-            )
-        prefix = rf"{{\fs{effective_size}}}" if effective_size != font_size else ""
-        text = prefix + r"\N".join(wrapped_lines)
-        lines.append(f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Reel,,0,0,0,,{text}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def write_end_card_ass(
@@ -455,6 +409,31 @@ def _resolve_subtitle_position(
         "frames": frames,
     }
 
+def _cleanup_render_artifacts(
+    *,
+    reel_dir: Path,
+    output_video: Path,
+    content_video: Path,
+    end_card_video: Path,
+    keep_intermediates: bool,
+) -> None:
+    """Remove successful render intermediates while preserving useful assets.
+
+    On failure the files are intentionally kept for diagnosis. On success the
+    final MP4, subtitles, caption, metadata, and correction cache remain.
+    """
+    if keep_intermediates or not output_video.is_file() or output_video.stat().st_size <= 0:
+        return
+    for path in (
+        content_video if content_video != output_video else None,
+        end_card_video,
+        reel_dir / "concat.txt",
+        reel_dir / "end_card.ass",
+    ):
+        if path is not None:
+            path.unlink(missing_ok=True)
+
+
 def render_reel(
     *,
     source_video: Path,
@@ -462,9 +441,9 @@ def render_reel(
     all_cues: list[SubtitleCue],
     output_dir: Path,
     burn_subtitles: bool = True,
-    subtitle_font_size: int = 60,
+    subtitle_font_size: int = 72,
     subtitle_margin_v: int = 150,
-    subtitle_wrap_width: int = 23,
+    subtitle_wrap_width: int = 30,
     subtitle_max_lines: int = 2,
     subtitle_position: str = "auto",
     subtitle_correction: str = "basic",
@@ -483,6 +462,7 @@ def render_reel(
     crf: int = 20,
     preset: str = "medium",
     allow_subtitle_fallback: bool = False,
+    keep_render_intermediates: bool = False,
 ) -> dict[str, Any]:
     reel_dir = output_dir / selection.id
     reel_dir.mkdir(parents=True, exist_ok=True)
@@ -566,6 +546,7 @@ def render_reel(
     metadata["subtitle_layout_analysis"] = subtitle_layout
     metadata["correction_dictionary"] = str(correction_dictionary) if correction_dictionary else "built-in"
     metadata["crop_mode"] = crop_mode
+    metadata["keep_render_intermediates"] = keep_render_intermediates
     metadata["source_segments"] = [segment.to_dict() for segment in source_segments]
     metadata["framing_plan"] = [segment.to_dict() for segment in framing_plan]
     write_json(metadata_path, metadata)
@@ -581,7 +562,7 @@ def render_reel(
         "source_segments": [segment.to_dict() for segment in source_segments],
         "subtitle_cues": len(display_cues),
         "video": str(output_video),
-        "content_video": str(content_video),
+        "content_video": str(content_video) if keep_render_intermediates or content_video == output_video else None,
         "subtitles": str(srt_path),
         "ass_subtitles": str(ass_path),
         "metadata": str(metadata_path),
@@ -598,6 +579,7 @@ def render_reel(
         "subtitle_layout_analysis": subtitle_layout,
         "status": "ok",
         "warnings": [],
+        "intermediates_kept": keep_render_intermediates,
     }
 
     if burn_subtitles and not display_cues:
@@ -686,6 +668,14 @@ def render_reel(
     if not output_video.exists() or output_video.stat().st_size == 0:
         result["status"] = "error"
         result["warnings"].append("output_video_missing")
+    if result["status"] == "ok":
+        _cleanup_render_artifacts(
+            reel_dir=reel_dir,
+            output_video=output_video,
+            content_video=content_video,
+            end_card_video=end_card_video,
+            keep_intermediates=keep_render_intermediates,
+        )
     return result
 
 
@@ -696,9 +686,9 @@ def render_reels(
     all_cues: list[SubtitleCue],
     output_dir: Path,
     burn_subtitles: bool = True,
-    subtitle_font_size: int = 60,
+    subtitle_font_size: int = 72,
     subtitle_margin_v: int = 150,
-    subtitle_wrap_width: int = 23,
+    subtitle_wrap_width: int = 30,
     subtitle_max_lines: int = 2,
     subtitle_position: str = "auto",
     subtitle_correction: str = "basic",
@@ -717,6 +707,7 @@ def render_reels(
     crf: int = 20,
     preset: str = "medium",
     allow_subtitle_fallback: bool = False,
+    keep_render_intermediates: bool = False,
     progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> list[dict[str, Any]]:
     results = []
@@ -750,6 +741,7 @@ def render_reels(
                 crf=crf,
                 preset=preset,
                 allow_subtitle_fallback=allow_subtitle_fallback,
+                keep_render_intermediates=keep_render_intermediates,
             )
         )
         if progress_callback:

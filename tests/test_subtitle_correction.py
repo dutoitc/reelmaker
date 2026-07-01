@@ -37,3 +37,4 @@ def test_ollama_partial_response_keeps_basic_correction_for_missing_items(tmp_pa
     )
 
     assert [cue.text for cue in corrected] == ["Premier corrige", "Hulotte"]
+    assert not (tmp_path / "corrected.raw.txt").exists()

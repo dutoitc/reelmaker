@@ -52,14 +52,15 @@ Explain the concrete stability benefit and obtain objective validation before a 
 
 ## Current strategic direction
 
-Version 0.7.0 adds non-truncating subtitles, automatic subtitle placement, embedded-text/two-person preservation, a correction dictionary, sentence-complete extensions, and global composite selection.
+Version 0.8.1 adds DaVinci Resolve source-edit XML timelines and a cleaner card-based GUI while retaining the 0.8 compact deliverables and subtitle safeguards.
 
 Preferred sequence:
 
-1. validate real Xplore output in quality + hybrid + scene-smart + automatic subtitle-position mode;
-2. inspect `selected_reels.json`, subtitle files, each reel `metadata.json`, and `render_report.json`;
-3. tune text-detection, dictionary, boundary, and global-montage thresholds only from observed examples;
-4. next choose active-speaker tracking or aesthetic/B-roll scoring;
-5. refactor renderer responsibilities before adding music.
+1. validate one continuous and one composite XML timeline in DaVinci Resolve, including original audio and relinking;
+2. validate real Xplore output in quality + hybrid + scene-smart + automatic subtitle-position mode;
+3. inspect `selected_reels.json`, subtitle files, each reel `metadata.json`, and `render_report.json`;
+4. tune text-detection, subtitle typography, dictionary, boundary, and global-montage thresholds only from observed examples;
+5. next choose active-speaker tracking or aesthetic/B-roll scoring;
+6. refactor renderer responsibilities before adding music.
 
 Known limitations: existing-text detection is not OCR; active-speaker localisation is not implemented; ambiguous two-person shots preserve both people with fit-blur.

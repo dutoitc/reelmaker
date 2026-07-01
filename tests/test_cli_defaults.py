@@ -7,3 +7,6 @@ def test_all_command_uses_quality_oriented_defaults():
     assert args.composition_mode == "hybrid"
     assert args.subtitle_correction == "ollama"
     assert args.allow_subtitle_fallback is False
+    assert args.keep_render_intermediates is False
+    assert args.subtitle_font_size == 72
+    assert args.subtitle_wrap_width == 30

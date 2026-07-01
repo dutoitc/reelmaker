@@ -2,7 +2,7 @@
 
 ## Snapshot
 
-- Version: **0.7.0**
+- Version: **0.8.1**
 - Status: local CLI + optional Windows GUI MVP with MP4 transcription, structured editorial selection, global/composite montage, safe framing, subtitle correction, and progress reporting.
 - Primary platform: Windows 11 + Git Bash.
 - Reference runtime: Python 3.11 + NVIDIA RTX 4070 12 GB.
@@ -30,6 +30,7 @@ MP4/SRT/YouTube
   -> embedded-text analysis and subtitle placement
   -> contextual subtitle correction + packaged dictionary
   -> FFmpeg render + subtitle burn + YouTube end card
+  -> optional DaVinci XML timelines referencing original media
   -> render report
 ```
 
@@ -62,24 +63,33 @@ The optional PySide6 GUI starts the same CLI pipeline through `QProcess`; it own
 - two similarly important people: `fit-blur`;
 - subtitle correction: contextual Ollama with built-in French/Nord-vaudois dictionary;
 - subtitle position: `auto`;
+- subtitle typography: maximum 72 px, balanced to at most two lines with width-safe reduction;
 - end card: 1.5 seconds, `Voir sur YouTube`;
-- output: 1080x1920, H.264/AAC;
+- output: 1080x1920, H.264/AAC; successful render intermediates are cleaned by default;
 - subtitle fallback without burn: disabled;
-- GUI timing history: enabled under local application data.
+- GUI timing history: enabled under local application data;
+- GUI DaVinci XML export: enabled by default.
 
-## Version 0.7.0 delivered
+## Version 0.8.1 delivered
 
-- no subtitle ellipsis/truncation;
-- automatic subtitle placement away from existing text;
-- embedded-text/title-card full-frame preservation;
-- conservative two-person framing;
-- packaged correction dictionary and custom dictionary option;
-- sentence-complete end extension;
-- global composite editorial pass;
-- stronger impact-oriented generation/ranking;
-- quality/fast GUI profile;
-- default YouTube end card;
-- 53 passing tests, with GUI smoke conditional on PySide6.
+- one Final Cut Pro 7 XML timeline per reel, referencing the original video/audio source ranges;
+- composite selections become consecutive source clips in a vertical 1080x1920 timeline;
+- standalone `xml` command plus GUI checkbox and `--davinci-xml`;
+- XML paths recorded in reel metadata and render report;
+- refreshed card-based PySide6 interface with clearer source, settings, progress, ETA, actions, and logs;
+- GUI style isolated in `gui_style.py`; XML generation isolated in `davinci_xml.py`;
+- 64 passing tests with PySide6 installed.
+
+## Version 0.8.0 delivered
+
+- successful reel folders keep only final MP4, subtitles, caption, metadata, and correction cache;
+- render intermediates remain available on failure or with `--keep-render-intermediates`;
+- larger 72 px subtitles with balanced width-safe layout and 48 px horizontal margins;
+- subtitle layout extracted to `subtitle_layout.py`;
+- valid Ollama corrections no longer leave raw-response files;
+- conservative dangling-relative grammar repair and correction-cache schema bump;
+- all 0.7 framing, complete-sentence, dictionary, and editorial safeguards retained;
+- 58 passing tests, with GUI smoke conditional on PySide6.
 
 ## Known limitations
 

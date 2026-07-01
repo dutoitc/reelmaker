@@ -13,6 +13,7 @@ from .utils import read_json, write_json
 _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,.;:!?])")
 _MULTI_PUNCT_RE = re.compile(r"([!?.,;:]){3,}")
 _WS_RE = re.compile(r"\s+")
+_DANGLING_RELATIVE_RE = re.compile(r",\s*qui\s+permet(?=\s|$)", re.IGNORECASE)
 
 
 
@@ -52,6 +53,9 @@ def correct_text_basic(text: str, *, dictionary_path: Path | None = None) -> str
     text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
     text = re.sub(r"\s+(['’])\s+", r"\1", text)
     text = _MULTI_PUNCT_RE.sub(lambda m: m.group(1), text)
+    # Common spoken/ASR construction: the second relative clause refers to the
+    # whole preceding fact, not to the nearest plural noun.
+    text = _DANGLING_RELATIVE_RE.sub(", ce qui permet", text)
     text = apply_correction_dictionary(text, dictionary_path)
     if text:
         text = text[0].upper() + text[1:]
@@ -115,7 +119,7 @@ def _correction_fingerprint(cues: list[SubtitleCue], *, selection: ReelSelection
         "episode_title": episode_title,
         "model": model,
         "dictionary": dictionary_fingerprint_payload(dictionary_path),
-        "schema": 3,
+        "schema": 4,
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
@@ -161,8 +165,12 @@ def correct_cues_with_ollama(
         json_schema=subtitle_response_schema(max_items=len(cues)),
     )
     raw_path = cache_path.with_suffix(".raw.txt")
-    raw_path.write_text(raw_text, encoding="utf-8")
-    payload = parse_json_loose(raw_text)
+    try:
+        payload = parse_json_loose(raw_text)
+    except Exception:
+        # Keep raw model output only when it is useful for diagnosis.
+        raw_path.write_text(raw_text, encoding="utf-8")
+        raise
     items = payload.get("subtitles", []) if isinstance(payload, dict) else []
     if not isinstance(items, list):
         raise ValueError("Subtitle correction response does not contain a subtitles list")
@@ -178,6 +186,7 @@ def correct_cues_with_ollama(
             SubtitleCue(c.index, c.start, c.end, by_index.get(c.index, c.text))
             for c in corrected
         ]
+    raw_path.unlink(missing_ok=True)
     write_json(
         cache_path,
         {

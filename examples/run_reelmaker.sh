@@ -32,9 +32,9 @@ python -m reelmaker all \
   --min-duration 18 \
   --target-duration 22 \
   --max-duration 60 \
-  --subtitle-font-size 60 \
+  --subtitle-font-size 72 \
   --subtitle-margin-v 150 \
-  --subtitle-wrap-width 23 \
+  --subtitle-wrap-width 30 \
   --subtitle-max-lines 2 \
   --subtitle-correction basic \
   --crop-mode scene-smart \

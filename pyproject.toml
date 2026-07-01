@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reelmaker"
-version = "0.7.0"
+version = "0.8.1"
 description = "Generate vertical reels from a local video using local transcription and Ollama."
 readme = "README.md"
 requires-python = ">=3.10"

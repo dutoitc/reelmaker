@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.1 — 2026-06-30
+
+- Add Final Cut Pro 7 XML timeline export for DaVinci Resolve, referencing the original video and audio source ranges.
+- Export one `Rxx.xml` beside each reel; composite reels become consecutive source clips in a 1080x1920 sequence.
+- Add the standalone `xml` command and `--davinci-xml`; enable XML export by default in the GUI.
+- Record XML paths in each reel `metadata.json` and the global `render_report.json`.
+- Redesign the PySide6 interface with card sections, a modern local dark theme, clearer status/progress/ETA, cleaner actions, and an improved log panel.
+- Isolate XML export in `davinci_xml.py` and GUI theming in `gui_style.py`.
+- Expand the full suite to 64 passing tests with PySide6 installed.
+
+## 0.8.0 — 2026-06-30
+
+- Delete successful render intermediates by default: `*_content.mp4`, `*_end_card.mp4`, `concat.txt`, and `end_card.ass`.
+- Add `--keep-render-intermediates` for explicit FFmpeg debugging; failed renders retain their artifacts automatically.
+- Increase the default subtitle size from 60 to 72 and the display split width from 23 to 30 characters.
+- Add balanced, estimated-width subtitle layout with a 48-pixel horizontal safe margin and automatic font reduction only when necessary.
+- Extract subtitle layout into dedicated `subtitle_layout.py` instead of expanding `renderer.py`.
+- Keep raw Ollama subtitle output only when JSON parsing fails.
+- Add a conservative repair for the common spoken/ASR construction `, qui permet` -> `, ce qui permet`.
+- Bump the subtitle-correction fingerprint schema so existing cached corrections are safely regenerated.
+- Validate a real FFmpeg content + end-card render: final MP4 retained, temporary MP4/ASS/concat files removed.
+- Expand the suite to 58 passing tests; GUI smoke remains conditional on PySide6.
+
 ## 0.7.0 — 2026-06-30
 
 - Removed ASS subtitle truncation; every generated word is preserved, with timed cue splitting and font reduction when needed.

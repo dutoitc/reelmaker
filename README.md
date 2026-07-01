@@ -7,9 +7,10 @@ Generate several vertical reels from a long video with local tools:
 - **FFmpeg** for 9:16 rendering, subtitles, and optional end cards;
 - **OpenCV** for local face/motion framing hints;
 - **PySceneDetect** for optional shot detection and per-shot framing;
-- **PySide6** for the optional Windows desktop interface.
+- **PySide6** for the optional Windows desktop interface;
+- **Final Cut Pro 7 XML** for source-edit timelines importable into DaVinci Resolve.
 
-Version **0.7.0** hardens real-world output quality: no subtitle truncation, automatic avoidance of text already present in the video, preservation of two-person/title-card shots, a Nord-vaudois correction dictionary, sentence-complete endings, and a global editorial montage pass.
+Version **0.8.1** adds DaVinci Resolve XML handoff and a cleaner card-based Windows interface while preserving the compact 0.8 deliverables and subtitle safeguards.
 
 ## Recommended environment
 
@@ -144,6 +145,7 @@ The interface provides:
 
 - MP4 and output-directory selection;
 - Ollama model, editorial quality profile, target count, crop mode, composition mode, subtitle correction, and automatic subtitle placement;
+- optional DaVinci Resolve XML timelines, enabled by default in the GUI;
 - current stage and stage progress;
 - overall progress;
 - elapsed time;
@@ -152,6 +154,39 @@ The interface provides:
 - cancel and open-output buttons.
 
 The GUI remains a thin layer over the CLI. Processing logic stays in the existing modules and the GUI starts `python -m reelmaker all` as a subprocess.
+
+The 0.8.1 interface uses compact cards, a clearer current-status badge, separate stage/global progress, a cleaner log panel, and keeps the multi-run ETA history behind a tooltip instead of exposing the full local path.
+
+## DaVinci Resolve XML export
+
+The GUI enables **Create DaVinci Resolve XMLs** by default. The same export is available from the CLI:
+
+```bash
+python -m reelmaker all \
+  --source-video "/c/Videos/reportage.mp4" \
+  --davinci-xml \
+  --output-dir "output/reportage"
+```
+
+Export XML files only from an existing `selected_reels.json` without rerunning WhisperX, Ollama, or FFmpeg:
+
+```bash
+python -m reelmaker xml \
+  --source-video "/c/Videos/reportage.mp4" \
+  --selected-reels "output/reportage/selected_reels.json" \
+  --output-dir "output/reportage"
+```
+
+One Final Cut Pro 7 XML timeline is written beside each reel:
+
+```text
+output/reportage/reels/R01/R01.xml
+output/reportage/reels/R02/R02.xml
+```
+
+Each XML creates a 1080x1920 timeline and references the **original video and audio** with the selected source in/out points. Composite reels become several consecutive source clips. Import through DaVinci Resolve's timeline import command. If the original video was moved, relink the offline media in Resolve.
+
+The XML is intended for manual finishing. It reproduces the source edit decisions, but not generated FFmpeg effects such as burned subtitles, blurred background, automatic crop/framing, or the final YouTube card.
 
 ## Multi-run time estimates
 
@@ -218,6 +253,41 @@ python -m reelmaker all \
 Runtime dependencies are checked before expensive transcription. For example, `scene-smart` now fails immediately when PySceneDetect is missing instead of analyzing the full video and failing during rendering.
 
 If no MP4 is produced, the command exits with an error and points to `render_report.json` and the corresponding `ffmpeg.error.txt` files.
+
+
+## Clean reel output
+
+After a successful render, each reel folder keeps only the useful deliverables by default:
+
+```text
+R01.mp4
+R01.xml                    # when DaVinci XML export is enabled
+caption.txt
+metadata.json
+subtitles.srt
+subtitles.ass
+subtitles_corrected.json   # when Ollama correction is used
+```
+
+Temporary files such as `R01_content.mp4`, `R01_end_card.mp4`, `concat.txt`, and `end_card.ass` are deleted only after the final MP4 has been validated. They remain available automatically after a failure. For FFmpeg debugging, keep them explicitly:
+
+```bash
+--keep-render-intermediates
+```
+
+Valid Ollama subtitle responses no longer leave `subtitles_corrected.raw.txt`; the raw response is retained only when JSON parsing fails.
+
+## Subtitle sizing in 0.8
+
+The defaults are now:
+
+```bash
+--subtitle-font-size 72
+--subtitle-wrap-width 30
+--subtitle-max-lines 2
+```
+
+Lines are balanced using an estimated rendered width and a 48-pixel horizontal safe margin. Reelmaker first uses the requested large font, then reduces it only when required to stay inside the 1080-pixel frame. No word is truncated.
 
 ## Editorial composition
 
@@ -505,7 +575,7 @@ pip install -e ".[dev,vision,transcription,gui]"
 bash scripts/check_project.sh
 ```
 
-The full environment currently runs 45 tests. The GUI smoke test is skipped automatically when PySide6 is not installed.
+The full environment currently runs 64 tests. The GUI smoke test is skipped automatically when PySide6 is not installed.
 
 
 ## Subtitle and on-screen text safety
@@ -518,7 +588,7 @@ Defaults:
 --subtitle-max-lines 2
 ```
 
-Rules in 0.7.0:
+Rules retained from 0.7.0 and refined in 0.8.0:
 
 - generated subtitle text is **never truncated with `...`**;
 - long cues are divided over their original timing while preserving every word;

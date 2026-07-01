@@ -40,7 +40,23 @@
 - quality/fast GUI profile;
 - default `Voir sur YouTube` end card.
 
-## Validation gate for 0.7.x
+### 0.8.0 — compact deliverables and subtitle typography
+
+- final reel folders no longer retain content/end-card temporary MP4 files;
+- explicit `--keep-render-intermediates` debugging mode;
+- larger balanced subtitles with width-safe dynamic sizing;
+- dedicated subtitle-layout module;
+- raw Ollama subtitle responses kept only on parse failure;
+- conservative final grammar repair and correction-cache invalidation.
+
+### 0.8.1 — DaVinci handoff and GUI polish
+
+- one Final Cut Pro 7 XML timeline per reel using original source in/out points;
+- vertical 1080x1920 sequence, original audio, composite source clips, and timeline marker;
+- standalone `xml` command, CLI flag, GUI default checkbox, metadata/report paths;
+- card-based PySide6 layout with clearer progress, ETA, status, actions, and logs.
+
+## Validation gate for 0.8.x
 
 Test at least two real reportages with:
 
@@ -61,9 +77,10 @@ Record observations for:
 - correct local names;
 - complete final sentences;
 - editorial strength of continuous and global-composite proposals;
-- ETA accuracy after several runs.
+- ETA accuracy after several runs;
+- import at least one continuous and one composite XML timeline into DaVinci Resolve, checking source relink, audio, frame rate, and source in/out points.
 
-## Candidate iteration 0.7.1 — tuning from real footage
+## Candidate iteration 0.8.1 — tuning from real footage
 
 Only after inspecting output metadata and examples:
 
@@ -73,7 +90,7 @@ Only after inspecting output metadata and examples:
 - add dictionary entries observed in real transcripts;
 - improve diagnostics for rejected/incomplete candidates.
 
-## Candidate iteration 0.8 — active speaker and person tracking
+## Candidate iteration 0.9 — active speaker and person tracking
 
 Refactoring checkpoint: create a dedicated tracking subsystem rather than expanding `vision.py` indefinitely.
 
@@ -83,7 +100,7 @@ Refactoring checkpoint: create a dedicated tracking subsystem rather than expand
 - crop the active speaker only at high confidence;
 - preserve both people otherwise.
 
-## Candidate iteration 0.9 — beautiful views and B-roll
+## Candidate iteration 1.0 — beautiful views and B-roll
 
 - representative frames per scene;
 - blur/exposure/stability scores;
@@ -91,7 +108,7 @@ Refactoring checkpoint: create a dedicated tracking subsystem rather than expand
 - detect and propose strong scenic inserts;
 - human validation before automatic insertion.
 
-## Candidate iteration 1.0 — music
+## Candidate iteration 1.1 — music
 
 Refactor renderer responsibilities first.
 
